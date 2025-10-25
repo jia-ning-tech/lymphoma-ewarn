@@ -94,7 +94,7 @@ python -m src.cli.plot_curves --horizon 48 --split test
 
 <div align="center">
   <img src="outputs/figures/roc_h24_test.png" alt="ROC 24h" width="45%"/>
-  <img src="outputs/figures/pr_h24_test.png" alt="PR 24h" width="45%"/><br/>
+  <img src="outputs/figures/pr_h24_test.png" alt="PR 24h" width="45%"/><br/><br/>
   <img src="outputs/figures/roc_h48_test.png" alt="ROC 48h" width="45%"/>
   <img src="outputs/figures/pr_h48_test.png" alt="PR 48h" width="45%"/>
 </div>
