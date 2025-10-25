@@ -1,0 +1,150 @@
+# =========================
+# Lymphoma-EWARN Makefile
+# 自动生成项目结构并注入 README
+# =========================
+
+# -------- 可调参数 --------
+PY ?= python
+HORIZONS ?= 24,48
+SPLIT ?= test
+README ?= README.md
+ROOT := $(shell pwd)
+
+# -------- 路径布局 --------
+DOCS_DIR := outputs/docs
+STRUCT_MD := $(DOCS_DIR)/project_structure.md
+
+# 伪目标
+.PHONY: help structure inject-structure readme show-structure clean-structure
+
+help:
+	@echo "Usage:"
+	@echo "  make structure           # 生成 outputs/docs/project_structure.md"
+	@echo "  make show-structure      # 预览生成的项目结构前 120 行"
+	@echo "  make inject-structure    # 将项目结构注入 README 的锚点区间"
+	@echo "  make readme              # 重新生成 README（英文）并注入项目结构"
+	@echo "  make clean-structure     # 删除生成的 project_structure.md"
+	@echo ""
+	@echo "Env vars:"
+	@echo "  PY=$(PY)"
+	@echo "  HORIZONS=$(HORIZONS)           # 逗号分隔，例如 24,48"
+	@echo "  SPLIT=$(SPLIT)                 # val 或 test"
+	@echo "  README=$(README)               # README 路径（默认仓库根）"
+
+# 目录确保存在
+$(DOCS_DIR):
+	@mkdir -p $(DOCS_DIR)
+
+# 生成项目结构 Markdown 文件（自动扫描目录，含摘要表与树形结构）
+$(STRUCT_MD): | $(DOCS_DIR)
+	@echo "[Makefile] Generating project structure -> $@"
+	@$(PY) - <<'PY'
+import os
+from pathlib import Path
+
+root = Path(".").resolve()
+out_path = Path("$(STRUCT_MD)")
+out_path.parent.mkdir(parents=True, exist_ok=True)
+
+DESC = {
+    "src": "Source code.",
+    "src/cli": "Command-line tools for training, evaluation, plots, release.",
+    "data_raw": "Original/raw data (not tracked).",
+    "data_interim": "Intermediate/engineered feature tables for modeling.",
+    "outputs": "Auto-generated artifacts.",
+    "outputs/models": "Trained model bundles (.joblib).",
+    "outputs/preds": "Inference & validation predictions (.parquet).",
+    "outputs/reports": "Metrics/tables used in paper & README (CSV/JSON/Parquet).",
+    "outputs/figures": "Figures (ROC/PR, calibration, SHAP, lead-time, etc.).",
+    "outputs/release": "Model release package for monitoring.",
+    "notebooks": "Exploratory notebooks (optional).",
+    "scripts": "Utility scripts (optional).",
+}
+IGNORE_DIRS = {
+    ".git", ".github", "__pycache__", ".ipynb_checkpoints",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", "venv", ".venv"
+}
+
+def build_tree(start: Path, prefix=""):
+    lines = []
+    try:
+        entries = sorted(
+            [p for p in start.iterdir() if p.name not in IGNORE_DIRS],
+            key=lambda p: (p.is_file(), p.name.lower())
+        )
+    except PermissionError:
+        return lines
+    for i, p in enumerate(entries):
+        is_last = i == len(entries) - 1
+        branch = "└── " if is_last else "├── "
+        if p.is_dir():
+            lines.append(f"{prefix}{branch}{p.name}/")
+            ext_prefix = f"{prefix}    " if is_last else f"{prefix}│   "
+            lines.extend(build_tree(p, ext_prefix))
+        else:
+            lines.append(f"{prefix}{branch}{p.name}")
+    return lines
+
+rows = []
+for k, v in sorted(DESC.items()):
+    p = root / k
+    exists = p.exists()
+    n_files = sum(1 for _ in p.rglob("*") if _.is_file()) if exists else 0
+    rows.append((k, v, "yes" if exists else "no", n_files))
+
+md = []
+md.append("## Project Structure")
+md.append("")
+md.append("### Key Directories (auto-generated)")
+md.append("")
+md.append("| Path | Description | Exists | #Files |")
+md.append("|---|---|:---:|---:|")
+for k, desc, exists, n in rows:
+    md.append(f"| `{k}` | {desc} | {exists} | {n} |")
+md.append("")
+md.append("### Full Tree (auto-generated)")
+md.append("")
+md.append("```text")
+md.extend(build_tree(root))
+md.append("```")
+md.append("")
+
+out_path.write_text("\n".join(md), encoding="utf-8")
+print(str(out_path))
+PY
+
+structure: $(STRUCT_MD)
+
+show-structure: $(STRUCT_MD)
+	@echo ""
+	@echo "---- PREVIEW: $(STRUCT_MD) ----"
+	@sed -n '1,120p' $(STRUCT_MD)
+	@echo "---- (truncated; full in file) ----"
+
+# 将 $(STRUCT_MD) 注入 README.md 的锚点区间
+# 若 README 不含锚点，则在文末自动追加带锚点的章节后再注入
+inject-structure: $(STRUCT_MD)
+	@echo "[Makefile] Injecting project structure into $(README)"
+	@touch $(README)
+	@if ! grep -q "<!-- STRUCTURE:BEGIN -->" $(README); then \
+	  echo "" >> $(README); \
+	  echo "## Project Structure" >> $(README); \
+	  echo "<!-- STRUCTURE:BEGIN -->" >> $(README); \
+	  echo "_auto-filled by Makefile, do not edit by hand_" >> $(README); \
+	  echo "<!-- STRUCTURE:END -->" >> $(README); \
+	fi
+	@awk 'BEGIN{skip=0} \
+	  /<!-- STRUCTURE:BEGIN -->/ {print; system("cat $(STRUCT_MD)"); skip=1; next} \
+	  /<!-- STRUCTURE:END -->/   {skip=0} \
+	  {if(!skip) print}' $(README) > $(README).tmp && mv $(README).tmp $(README)
+	@echo "[Makefile] Injected structure section into $(README)"
+
+# 重新生成英文 README（使用既有 CLI），随后注入结构
+readme:
+	@echo "[Makefile] Regenerating README via CLI (horizons=$(HORIZONS), split=$(SPLIT))"
+	@$(PY) -m src.cli.mk_readme --horizons $(HORIZONS) --split $(SPLIT) --out $(README)
+	@$(MAKE) inject-structure
+
+clean-structure:
+	@rm -f $(STRUCT_MD)
+	@echo "[Makefile] Removed $(STRUCT_MD)"

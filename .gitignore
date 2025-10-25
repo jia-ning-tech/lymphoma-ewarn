@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.log
+.vscode/
+.idea/
+
+# 数据与大文件（避免隐私与超大文件）
+data_raw/
+data_interim/
+data_external/
+outputs/
+
+# 常见大文件单独再保护一层（即使不在 outputs/ 里）
+*.parquet
+*.feather
+*.csv
+*.xlsx
+*.joblib
+*.pkl
+
+# 缓存与系统文件
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store

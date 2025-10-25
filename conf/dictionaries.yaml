@@ -1,0 +1,140 @@
+# ===================== Event Dictionaries (lymphoma-ewarn) =====================
+# 说明：
+# - 本文件定义“升压药启动/升级”“IMV启动”“CRRT启动”的识别词典与规则。
+# - 我们优先通过名称/正则来识别，兼容单位差异；itemid/label 白名单可选（留空也能工作）。
+# - detect_events.py 会使用这些配置，按 stay 合并近邻触发、去抖动，并输出首次事件时间戳。
+
+meta:
+  version: 0.1
+  updated: 2025-10-23
+  notes: "初版词典：以通用正则+别名覆盖；后续可在你数据上微调。"
+
+# ------------------------------------------------------------------------------
+# 1) 升压药（Vasopressors）
+# 识别规则（总体思想）：
+# - 来自 ICU inputevents（或 prescriptions）中的药物名称（或成分名）匹配下列别名/正则；
+# - rate/amount > 0 视为“用药中”；从 0→>0 判定为“启动”；速率显著上升判定为“升级”；
+# - “显著上升”的阈值在 rules.upgrade.relative_pct 与 absolute_delta 中定义（满足其一即成立）。
+# ------------------------------------------------------------------------------
+vasopressors:
+  normalize_map:  # 将各种写法规范到 canonical_name
+    # Norepinephrine
+    "(?i)^(norepinephrine|noradrenaline|levophed|levo)$": norepinephrine
+    # Epinephrine
+    "(?i)^(epinephrine|adrenaline)$": epinephrine
+    # Vasopressin
+    "(?i)^(vasopressin|pitressin)$": vasopressin
+    # Phenylephrine
+    "(?i)^(phenylephrine|neosynephrine|neo-synephrine)$": phenylephrine
+    # Dopamine
+    "(?i)^dopamine$": dopamine
+    # （可选）Dobutamine 主要是正性肌力，并非典型升压药，可保留观察
+    "(?i)^dobutamine$": dobutamine
+
+  # 可选白名单：若为空则不做 item 过滤，仅靠名称/正则识别
+  item_label_whitelist: []     # 例：["Norepinephrine", "Vasopressin"]
+  itemid_whitelist: []         # 例：[221906, 221749]（MIMIC-IV 不同版本可能不同，先留空）
+
+  units_hints:                 # 常见单位（用于后续统一换算；若未知则按>0判断）
+    norepinephrine: ["mcg/min", "mcg/kg/min", "ug/min", "ug/kg/min"]
+    epinephrine:    ["mcg/min", "mcg/kg/min", "ug/min", "ug/kg/min"]
+    vasopressin:    ["units/min", "milliunits/min", "units/hr", "mU/min"]
+    phenylephrine:  ["mcg/min", "ug/min"]
+    dopamine:       ["mcg/kg/min", "ug/kg/min"]
+    dobutamine:     ["mcg/kg/min", "ug/kg/min"]
+
+  rules:
+    # 视为“启动”的最小阳性速率（不同药物差异大，这里仅作为兜底，后续会在代码中做 >0 判定优先）
+    min_positive_rate:
+      default: 0.0
+      vasopressin: 0.0001     # 有些记录是 mU/min，避免被当作0
+    # “升级”判定阈值（满足任一）
+    upgrade:
+      relative_pct: 0.5       # 速率较最近稳定值上升 ≥50%
+      absolute_delta:         # 或绝对增量达到某阈值（不同药物量级不同）
+        norepinephrine: 0.02  # 例如 mcg/kg/min 增加 0.02
+        epinephrine:    0.02
+        phenylephrine:  25.0  # 例如 ug/min 增加 25
+        dopamine:       2.0   # 例如 ug/kg/min 增加 2
+        vasopressin:    0.0005 # 例如 units/min 增加 0.0005
+
+# ------------------------------------------------------------------------------
+# 2) 有创机械通气 IMV（Invasive Mechanical Ventilation）
+# 识别规则（总体思想）：
+# - procedureevents 中包含“Intubation/Endotracheal intubation/Mechanical ventilation start”等关键词；
+# - chartevents / respiratory chart 里出现“Ventilator Mode/AC/VC/SIMV/PEEP/FIO2”等强信号；
+# - 为避免误报，建议采用“强信号>=1 +（可选）弱信号>=1”的合取规则；本版默认强信号>=1即判定启动。
+# ------------------------------------------------------------------------------
+imv:
+  procedure_keywords_strong:
+    - "(?i)endotracheal intubation"
+    - "(?i)orotracheal intubation"
+    - "(?i)tracheal intubation"
+    - "(?i)mechanical ventilation start"
+    - "(?i)intubation"
+  chartevents_keywords_strong:
+    - "(?i)^ventilator mode$"
+    - "(?i)assist.?control"
+    - "(?i)volume control"
+    - "(?i)pressure control"
+    - "(?i)SIMV"
+    - "(?i)PRVC"
+    - "(?i)AC/VC"
+  chartevents_keywords_supportive:
+    - "(?i)^fio2"           # FIO2 Set
+    - "(?i)^peep"           # PEEP Set
+    - "(?i)endotracheal|\\bETT\\b"
+    - "(?i)airway type"
+    - "(?i)tidal volume"
+  item_label_whitelist: []   # 可后续填入明确的 label（如 "Ventilator Mode"）
+  itemid_whitelist: []       # 暂留空，后续可填 MIMIC-IV 对应 itemid
+  confirmation_rule:
+    require_supportive: false   # 若设为 true：需“强信号>=1 && 支持信号>=1”才判定为IMV启动
+    merge_nearby_minutes: 10    # 将近邻多条强/弱信号合并为一次启动
+
+# ------------------------------------------------------------------------------
+# 3) CRRT（连续肾替代治疗）
+# 识别规则（总体思想）：
+# - procedureevents/procedures 中出现 CRRT/CVVH/CVVHD/CVVHDF；
+# - inputevents 中如 Dialysate/Replacement fluid/Citrate 等关键液体流入；
+# - chartevents 中如 "CRRT effluent rate"/"Filter pressure" 等监护项。
+# - 优先以 procedureevents 的强信号为准，其他作为佐证并合并近邻触发。
+# ------------------------------------------------------------------------------
+crrt:
+  procedure_keywords_strong:
+    - "(?i)CRRT"
+    - "(?i)CVVH(?!D|DF)"     # 纯CVVH
+    - "(?i)CVVHD"
+    - "(?i)CVVHDF"
+    - "(?i)continuous veno.?venous"
+    - "(?i)renal replacement therapy"
+    - "(?i)prismaflex"
+  inputevents_keywords_supportive:
+    - "(?i)dialysate"
+    - "(?i)replacement fluid"
+    - "(?i)citrate"
+    - "(?i)anticoagulant.*citrate"
+  chartevents_keywords_supportive:
+    - "(?i)CRRT effluent rate"
+    - "(?i)ultrafiltration rate"
+    - "(?i)filter pressure"
+  item_label_whitelist: []
+  itemid_whitelist: []
+  confirmation_rule:
+    prefer_procedure_first: true
+    merge_nearby_minutes: 15
+
+# ------------------------------------------------------------------------------
+# 4) 通用去抖动/时间容差（各事件共用）
+# ------------------------------------------------------------------------------
+general:
+  merge_window_minutes: 10    # 将同类事件在该窗口内的重复触发合并为一次
+  time_tolerance_minutes: 5   # 跨表对齐时间戳的容差
+  pick_first_event_per_stay: true
+
+# ------------------------------------------------------------------------------
+# 5) 调试参数：长任务的日志/进度心跳（由上层 config.logging/progress 控制）
+# 这里保留占位，实际使用 config.yaml 中的 logging/progress 配置。
+# ------------------------------------------------------------------------------
+debug:
+  verbose_match_samples: 3    # 每类事件打印最多多少条样例匹配（便于快速自检）

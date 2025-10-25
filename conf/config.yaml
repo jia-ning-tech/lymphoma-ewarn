@@ -1,0 +1,120 @@
+# ========== Project-wide Configuration (lymphoma-ewarn) ==========
+paths:
+  root: /public/home/aojiang/mimic/lymphoma-ewarn
+  raw_hosp: /public/home/aojiang/mimic/lymphoma-ewarn/data_raw/hosp   # 软链接到 MIMIC hosp
+  raw_icu:  /public/home/aojiang/mimic/lymphoma-ewarn/data_raw/icu    # 软链接到 MIMIC icu
+  interim:  /public/home/aojiang/mimic/lymphoma-ewarn/data_interim
+  features: /public/home/aojiang/mimic/lymphoma-ewarn/data_features
+  outputs:  /public/home/aojiang/mimic/lymphoma-ewarn/outputs
+  reports:  /public/home/aojiang/mimic/lymphoma-ewarn/reports
+
+logging:
+  level: INFO           # DEBUG / INFO / WARNING
+  to_file: true
+  log_dir: /public/home/aojiang/mimic/lymphoma-ewarn/outputs/logs
+  heartbeat_secs: 30    # 心跳：长任务每隔多少秒打一次“还活着”
+  timefmt: "%Y-%m-%d %H:%M:%S"
+
+progress:
+  enable_tqdm: true
+  refresh_secs: 0.5     # 进度条刷新频率（秒）
+  spinner: "dots"       # 可选：dots, line, arc（用于简短步骤的微型动画）
+  show_eta: true        # 显示预计剩余时间（倒计时）
+
+parallel:
+  n_jobs: 16            # CPU 并行度；大任务将按 stay 分片并行
+  chunk_stays: 256      # 每批处理多少个 stay（避免任务过小或过大）
+  prefetch: 2           # 预取批次数
+  random_seed: 2025
+
+cohort:
+  min_age: 18
+  min_icu_hours: 24
+  first_icu_only: true
+  lymphoma_icd:
+    icd9_prefix: ["200", "201", "202"]       # 非霍奇金/霍奇金等
+    icd10_prefix: ["C81", "C82", "C83", "C84", "C85", "C96"]
+
+prediction:
+  horizons_hours: [24, 48]   # 主要做24h，拓展48h
+  index_freq: "1H"           # 逐小时索引
+  start_after_hours: 6       # 入ICU后第6小时起开始滚动预测
+
+windows:
+  hours: [6, 12, 24]         # 聚合窗口
+  aggregations: ["last","min","max","median","slope","std","iqr","delta_pct"]
+  add_missing_indicators: true
+
+features:
+  vitals: ["heart_rate","sbp","dbp","mbp","resp_rate","spo2","temperature"]
+  labs: ["lactate","ph","paco2","pao2","hco3","na","k","cl","ca","bun","creatinine",
+         "ast","alt","tbil","alb","inr","pt","aptt","wbc","hgb","platelet"]
+  outputs: ["urineoutput"]
+  interventions: ["norepi_rate","vasopressin_rate","epi_rate","dopa_rate","phenyl_rate",
+                  "fio2","peep","is_mech_vent"]
+  # 单位/方向/类型的期望 schema（可在 schema_features.yaml 细化）
+  schema_ref: conf/schema_features.yaml
+
+events:
+  # 事件定义的词典/ID 在 dictionaries.yaml 中维护
+  use_first_event_per_stay: true
+  types: ["vasopressor_start_or_up", "imv_start", "crrt_start"]
+  min_gap_minutes: 10   # 合并近邻重复触发（去抖动）
+
+labeling:
+  exclude_after_event: true         # 事件发生后不再生成后续t的标签
+  right_open_interval: true         # (t, t+H] 半开区间
+  tolerance_minutes: 5              # 时间对齐容差
+
+split:
+  seed: 2025
+  strategy: time_then_patient       # 先按年份切，再保证患者不泄漏
+  train_years: [2008, 2015]
+  test_years:  [2016, 2018]
+  val_ratio: 0.2                    # 从训练里再切出验证集
+
+io:
+  # 仅用 DuckDB / PyArrow 的 DataFrame/Arrow 接口（不写SQL）
+  reader_backend: "pyarrow"         # pyarrow | duckdb
+  to_parquet_enable: true           # 是否把裁剪子集缓存为 parquet
+  parquet_compression: "zstd"
+  parquet_row_group_bytes: 134217728  # 128MB row group，有利于扫描
+  datetime_tz: "naive"              # 保持naive时间（MIMIC为本地时间戳）
+
+model:
+  type: "lightgbm"                  # CPU友好
+  task: "binary"
+  target_name: "label"              # 训练时会重定向到 label_24h 或 label_48h
+  params:
+    num_leaves: 64
+    learning_rate: 0.05
+    n_estimators: 2000
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_data_in_leaf: 50
+    n_jobs: 16
+    random_state: 2025
+    # 类不平衡参数在训练阶段按数据动态设置（class_weight/scale_pos_weight）
+  early_stopping:
+    enable: true
+    rounds: 200
+  calibration: "isotonic"           # isotonic | platt | none
+
+metrics:
+  main: "AUPRC"
+  others: ["AUROC","Brier","F1","Recall","Precision","ECE"]
+  pr_points: 200
+  roc_points: 200
+
+figures:
+  dpi: 160
+  style: "default"
+  palette: "auto"
+
+artifacts:
+  split_idx: outputs/artifacts/split_idx.joblib
+  feature_schema: outputs/artifacts/feature_schema.json
+  calibration: outputs/artifacts/calibration.pkl
+
+dictionaries:
+  path: conf/dictionaries.yaml      # 升压药、IMV、CRRT 的字典（名称别名/项ID/关键词）

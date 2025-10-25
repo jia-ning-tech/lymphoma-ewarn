@@ -1,0 +1,412 @@
+from __future__ import annotations
+
+import os
+from typing import Dict, List, Tuple, Iterable
+
+import pandas as pd
+import numpy as np
+
+from ..config import get_cfg
+from ..utils.log import get_logger, heartbeat, progress_bar
+
+# ---------------------- helpers: discover itemids ---------------------- #
+
+VITAL_KEYWORDS: Dict[str, List[str]] = {
+    "heart_rate": ["Heart Rate"],
+    "resp_rate": ["Respiratory Rate"],
+    "spo2": ["SpO2", "O2 saturation", "SaO2"],
+    "temperature": ["Temperature Fahrenheit", "Temperature Celsius", "Temperature"],
+    "sbp": ["Non Invasive Blood Pressure systolic", "Invasive BP Systolic", "Arterial Blood Pressure systolic"],
+    "dbp": ["Non Invasive Blood Pressure diastolic", "Invasive BP Diastolic", "Arterial Blood Pressure diastolic"],
+    "mbp": ["Non Invasive Blood Pressure mean", "Invasive BP Mean", "Arterial Blood Pressure mean"],
+    "fio2": ["FiO2"],
+    "peep": ["PEEP"],
+}
+
+LAB_KEYWORDS: Dict[str, List[str]] = {
+    "lactate": ["Lactate"],
+    "ph": ["pH"],
+    "paco2": ["pCO2"],
+    "pao2": ["pO2"],
+    "hco3": ["Bicarbonate"],
+    "na": ["Sodium"],
+    "k": ["Potassium"],
+    "cl": ["Chloride"],
+    "ca": ["Calcium"],
+    "bun": ["Urea Nitrogen", "BUN"],
+    "creatinine": ["Creatinine"],
+    "ast": ["AST"],
+    "alt": ["ALT"],
+    "tbil": ["Bilirubin, Total", "Total Bilirubin"],
+    "alb": ["Albumin"],
+    "inr": ["INR"],
+    "pt": ["PT"],
+    "aptt": ["aPTT", "APTT"],
+    "wbc": ["WBC"],
+    "hgb": ["Hemoglobin"],
+    "platelet": ["Platelet", "Platelets"],
+}
+
+def _discover_itemids_d_items(cfg, patterns: Dict[str, List[str]]) -> Dict[str, List[int]]:
+    lg = get_logger("features.extract")
+    d_items = os.path.join(cfg.paths.raw_icu, "d_items.csv")
+    di = pd.read_csv(d_items, dtype={"itemid":"Int64"})  # 强制读 itemid 为整数
+    di["label"] = di["label"].astype(str).str.strip().str.lower()
+
+    out: Dict[str, List[int]] = {}
+    for var, kws in patterns.items():
+        hits = pd.Series(False, index=di.index)
+        for kw in kws:
+            hits = hits | di["label"].str.contains(str(kw).lower(), na=False)
+        itemids = di.loc[hits, "itemid"].dropna().astype(int).tolist()
+        out[var] = sorted(set(itemids))
+        lg.info(f"[discover] chartevents {var}: {len(itemids)} itemids")
+    return out
+
+def _discover_itemids_d_labitems(cfg, patterns: Dict[str, List[str]]) -> Dict[str, List[int]]:
+    lg = get_logger("features.extract")
+    d_lab = os.path.join(cfg.paths.raw_hosp, "d_labitems.csv")
+    dl = pd.read_csv(d_lab, dtype={"itemid":"Int64"})
+    dl["label"] = dl["label"].astype(str).str.strip().str.lower()
+
+    out: Dict[str, List[int]] = {}
+    for var, kws in patterns.items():
+        hits = pd.Series(False, index=dl.index)
+        for kw in kws:
+            hits = hits | dl["label"].str.contains(str(kw).lower(), na=False)
+        itemids = dl.loc[hits, "itemid"].dropna().astype(int).tolist()
+        out[var] = sorted(set(itemids))
+        lg.info(f"[discover] labevents {var}: {len(itemids)} itemids")
+    return out
+
+# ---------------------- core utils ---------------------- #
+
+def _ensure_paths(cfg):
+    os.makedirs(cfg.paths.interim, exist_ok=True)
+    os.makedirs(cfg.paths.features, exist_ok=True)
+
+def _read_cohort(cfg) -> pd.DataFrame:
+    path = os.path.join(cfg.paths.interim, "cohort.parquet")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing cohort: {path}")
+    df = pd.read_parquet(path)
+    for c in ["icu_in", "icu_out"]:
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    need = ["subject_id","hadm_id","stay_id","icu_in","icu_out"]
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise ValueError(f"Cohort missing columns: {missing}")
+    return df[need]
+
+def _chunks(lst: List[int], n: int) -> Iterable[List[int]]:
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
+
+def _normalize_numeric_and_time(df: pd.DataFrame,
+                                id_cols: List[str]) -> pd.DataFrame:
+    """统一列名并数值化；返回列：[*id_cols], charttime, itemid, value"""
+    if df.empty:
+        return pd.DataFrame(columns=id_cols + ["charttime","itemid","value"])
+
+    cols = {c.lower(): c for c in df.columns}
+
+    # 时间列优先 charttime，其次 storetime
+    tcol = None
+    for cand in ["charttime", "chart_time", "chart_time_utc", "storetime", "store_time"]:
+        if cand in cols:
+            tcol = cols[cand]; break
+    if tcol is None:
+        return pd.DataFrame(columns=id_cols + ["charttime","itemid","value"])
+
+    # 值列优先 valuenum，其次 value/valuetext（文本转数值尝试）
+    vcol = None
+    for cand in ["valuenum", "value", "valuetext", "value_num"]:
+        if cand in cols:
+            vcol = cols[cand]; break
+    if vcol is None:
+        return pd.DataFrame(columns=id_cols + ["charttime","itemid","value"])
+
+    itemid_col = cols.get("itemid", None)
+    keep = []
+    for k in id_cols:
+        if k in cols:
+            keep.append(cols[k])
+    keep += [tcol]
+    if itemid_col: keep.append(itemid_col)
+    keep += [vcol]
+
+    out = df[keep].copy()
+    out.rename(columns={tcol: "charttime"}, inplace=True)
+    if itemid_col:
+        out.rename(columns={itemid_col: "itemid"}, inplace=True)
+    out.rename(columns={vcol: "value"}, inplace=True)
+
+    # 类型转换
+    out["charttime"] = pd.to_datetime(out["charttime"], errors="coerce")
+    # 如果 value 是字符串，尽量提取数字
+    if out["value"].dtype == object:
+        out["value"] = pd.to_numeric(out["value"].str.extract(r"(-?\d+\.?\d*)")[0], errors="coerce")
+    else:
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+
+    out = out.dropna(subset=["charttime", "value"])
+
+    if "itemid" in out.columns:
+        out["itemid"] = pd.to_numeric(out["itemid"], errors="coerce").astype("Int64")
+        out = out.dropna(subset=["itemid"])
+        out["itemid"] = out["itemid"].astype(int)
+
+    # 确保 ID 列存在，即使为空
+    for k in id_cols:
+        if k not in out.columns:
+            out[k] = pd.NA
+
+    cols_final = id_cols + ["charttime","itemid","value"]
+    return out[cols_final]
+
+def _itemid_inverse_map(itemid_map: Dict[str, List[int]]) -> Dict[int, str]:
+    inv = {}
+    for var, ids in itemid_map.items():
+        for iid in ids:
+            inv[int(iid)] = var
+    return inv
+
+# ---------------------- Pandas streaming extractors ---------------------- #
+
+def _pandas_stream_vitals(chartevents_path: str,
+                          stay_ids: List[int],
+                          vit_itemids: Dict[str, List[int]],
+                          chunksize: int,
+                          lg) -> pd.DataFrame:
+    need_cols = ["stay_id","hadm_id","charttime","storetime","itemid","valuenum","value"]
+    usecols   = [c for c in need_cols]  # 都尝试读
+    stay_set  = set(int(x) for x in stay_ids)
+    item_set  = set(int(x) for ids in vit_itemids.values() for x in ids)
+
+    out = []
+    seen_rows = 0
+    kept_rows = 0
+
+    # 逐块读取并过滤
+    for i, chunk in enumerate(pd.read_csv(chartevents_path, usecols=usecols, chunksize=chunksize, low_memory=False)):
+        seen_rows += len(chunk)
+        # 类型统一
+        for col in ["stay_id","hadm_id","itemid"]:
+            if col in chunk.columns:
+                chunk[col] = pd.to_numeric(chunk[col], errors="coerce").astype("Int64")
+        mask = chunk["stay_id"].isin(stay_set) & chunk["itemid"].isin(item_set)
+        sub = chunk.loc[mask].copy()
+        kept_rows += len(sub)
+        if not sub.empty:
+            out.append(sub)
+        if i % 5 == 0:
+            lg.info(f"[stream vitals] chunk#{i} read={len(chunk)} kept={len(sub)} cum_kept={kept_rows}")
+
+    if not out:
+        lg.warning(f"[stream vitals] no rows matched stay_ids/itemids | seen={seen_rows}, kept={kept_rows}")
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","itemid","value"])
+
+    merged = pd.concat(out, ignore_index=True)
+    lg.info(f"[stream vitals] total kept={len(merged)} from seen={seen_rows}")
+    return _normalize_numeric_and_time(merged, ["stay_id","hadm_id"])
+
+def _pandas_stream_labs(labevents_path: str,
+                        hadm_ids: list,
+                        itemid_map: dict,
+                        chunksize: int = 400_000,
+                        lg=None) -> pd.DataFrame:
+    """
+    仅用 Pandas 流式读取 labevents：
+      - 不使用不存在的 'valuetext'
+      - 输出统一数值列 'value'：优先 valuenum，其次把原 CSV 的 'value' 尝试转成数值
+      - 消除 SettingWithCopyWarning（过滤后 .copy()，并用 .loc 赋值）
+    返回列：['hadm_id','charttime','itemid','variable','value']
+    """
+    usecols = ['subject_id','hadm_id','charttime','storetime','itemid','valuenum','value']
+    hadm_set = set(int(x) for x in hadm_ids)
+    # itemid -> variable 映射
+    id2var = {}
+    for var, ids in itemid_map.items():
+        for i in ids:
+            id2var[int(i)] = var
+    id_keep = set(id2var.keys())
+
+    keep = []
+    total_seen = 0
+    total_kept = 0
+
+    for i, chunk in enumerate(pd.read_csv(labevents_path,
+                                          usecols=usecols,
+                                          chunksize=chunksize,
+                                          low_memory=False,
+                                          engine="c")):
+        total_seen += len(chunk)
+
+        # --- 过滤并 copy，避免警告 ---
+        chunk = chunk[chunk['hadm_id'].isin(hadm_set)].copy()
+        # itemid 数字化
+        chunk.loc[:, 'itemid'] = pd.to_numeric(chunk['itemid'], errors='coerce').astype('Int64')
+        chunk = chunk[chunk['itemid'].notna()].copy()
+        chunk.loc[:, 'itemid'] = chunk['itemid'].astype(int)
+        chunk = chunk[chunk['itemid'].isin(id_keep)].copy()
+        if chunk.empty:
+            if lg and (i % 5 == 0):
+                lg.info(f"[stream labs] chunk#{i} read={len(chunk)} kept=0 cum_kept={total_kept}")
+            continue
+
+        # 变量命名
+        chunk.loc[:, 'variable'] = chunk['itemid'].map(id2var)
+
+        # 时间
+        chunk.loc[:, 'charttime'] = pd.to_datetime(chunk['charttime'], errors='coerce')
+        chunk = chunk.dropna(subset=['charttime']).copy()
+        if chunk.empty:
+            continue
+
+        # 统一数值列：优先 valuenum
+        chunk.loc[:, 'value_numeric'] = chunk['valuenum']
+        mask = chunk['value_numeric'].isna()
+        if mask.any():
+            chunk.loc[mask, 'value_numeric'] = pd.to_numeric(chunk.loc[mask, 'value'], errors='coerce')
+
+        # 丢掉无数值的
+        chunk = chunk.dropna(subset=['value_numeric']).copy()
+
+        # 现在删除原始文本 'value' 和 'valuenum'，只保留数值列
+        # 再把数值列改名成 'value'，从根上消除重复列名问题
+        cols_to_drop = [c for c in ['value', 'valuenum'] if c in chunk.columns]
+        if cols_to_drop:
+            chunk = chunk.drop(columns=cols_to_drop).copy()
+        chunk = chunk.rename(columns={'value_numeric': 'value'})
+
+        # 仅保留必要字段
+        keep.append(chunk[['hadm_id','charttime','itemid','variable','value']])
+
+        total_kept += len(keep[-1])
+        if lg and (i % 5 == 0 or i == 0):
+            lg.info(f"[stream labs] chunk#{i} read={len(chunk)} kept={len(keep[-1])} cum_kept={total_kept}")
+
+    if len(keep):
+        out = pd.concat(keep, ignore_index=True)
+    else:
+        out = pd.DataFrame(columns=['hadm_id','charttime','itemid','variable','value'])
+
+    if lg:
+        lg.info(f"[stream labs] total kept={len(out)} from seen={total_seen}")
+
+    return out
+
+def extract_vitals_labs(save_paths: Tuple[str, str] | None = None,
+                        pad_hours: int = 6) -> Tuple[str, str]:
+    cfg = get_cfg()
+    lg = get_logger("features.extract")
+    _ensure_paths(cfg)
+
+    out_vitals = os.path.join(cfg.paths.interim, "ts_vitals.parquet")
+    out_labs   = os.path.join(cfg.paths.interim, "ts_labs.parquet")
+    if save_paths:
+        out_vitals, out_labs = save_paths
+
+    cohort = _read_cohort(cfg)
+    stay_ids = cohort["stay_id"].astype(int).tolist()
+    hadm_ids = cohort["hadm_id"].astype(int).tolist()
+
+    vit_map = _discover_itemids_d_items(cfg, VITAL_KEYWORDS)
+    lab_map = _discover_itemids_d_labitems(cfg, LAB_KEYWORDS)
+
+    chartevents_path = os.path.join(cfg.paths.raw_icu,  "chartevents.csv")
+    labevents_path   = os.path.join(cfg.paths.raw_hosp, "labevents.csv")
+    if not os.path.exists(chartevents_path):
+        raise FileNotFoundError(f"Missing {chartevents_path}")
+    if not os.path.exists(labevents_path):
+        raise FileNotFoundError(f"Missing {labevents_path}")
+
+    # 读 ICU 窗口，用于过滤
+    cohort2 = cohort.copy()
+    cohort2["win_start"] = cohort2["icu_in"] - pd.Timedelta(hours=pad_hours)
+    cohort2["win_end"]   = cohort2["icu_out"] + pd.Timedelta(hours=pad_hours)
+    cohort_by_stay = cohort2.set_index("stay_id")[["hadm_id","win_start","win_end"]]
+    cohort_by_hadm = cohort2.set_index("hadm_id")[["win_start","win_end"]]
+
+    chunk_size = int(cfg.parallel.get("chunk_stays", 256)) * 20  # Pandas 走大块一些，加速
+    lg.info("Extracting ICU vitals from icu/chartevents.csv ... (Pandas streaming only)")
+    with heartbeat(lg, secs=int(cfg.logging.heartbeat_secs), note="extract vitals (pandas)"):
+        vit_raw = _pandas_stream_vitals(chartevents_path, stay_ids, vit_map, chunksize=500_000, lg=lg)
+
+    vit_df = pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+    if not vit_raw.empty:
+        # 时间窗过滤
+        # vit = vit_raw.merge(cohort_by_stay.reset_index(), on="stay_id", how="inner")
+        # vit = vit[(vit["charttime"] >= vit["win_start"]) & (vit["charttime"] <= vit["win_end"])]
+        # # itemid -> variable
+        # inv_v = {iid: var for var, ids in vit_map.items() for iid in ids}
+        # vit["variable"] = vit["itemid"].map(inv_v)
+        # vit = vit.dropna(subset=["variable"])
+        # vit_df = vit[["stay_id","hadm_id","charttime","variable","value"]].sort_values(["stay_id","charttime"])
+
+
+        vit = vit_raw.merge(cohort_by_stay.reset_index(), on="stay_id", how="inner")
+
+        # -- 解决 hadm_id_x / hadm_id_y 冲突，统一成 hadm_id --
+        if "hadm_id" not in vit.columns:
+            if "hadm_id_y" in vit.columns or "hadm_id_x" in vit.columns:
+                vit["hadm_id"] = vit.get("hadm_id_y", pd.Series(index=vit.index))
+                if "hadm_id_x" in vit.columns:
+                    vit["hadm_id"] = vit["hadm_id"].fillna(vit["hadm_id_x"])
+                for c in ["hadm_id_x", "hadm_id_y"]:
+                    if c in vit.columns:
+                        vit.drop(columns=c, inplace=True)
+
+        # 时间窗过滤
+        vit = vit[(vit["charttime"] >= vit["win_start"]) & (vit["charttime"] <= vit["win_end"])]
+
+        # itemid -> variable
+        inv_v = {iid: var for var, ids in vit_map.items() for iid in ids}
+        vit["variable"] = vit["itemid"].map(inv_v)
+        vit = vit.dropna(subset=["variable"])
+
+        vit_df = vit[["stay_id","hadm_id","charttime","variable","value"]].sort_values(["stay_id","charttime"])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    vit_df.to_parquet(out_vitals, index=False)
+    lg.info(f"vitals saved: {out_vitals} | rows={len(vit_df)} | vars={sorted(vit_df['variable'].unique().tolist()) if len(vit_df)>0 else []}")
+
+    lg.info("Extracting hospital labs from hosp/labevents.csv ... (Pandas streaming only)")
+    with heartbeat(lg, secs=int(cfg.logging.heartbeat_secs), note="extract labs (pandas)"):
+        lab_raw = _pandas_stream_labs(labevents_path, hadm_ids, lab_map, chunksize=400_000, lg=lg)
+
+    lab_df = pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+    if not lab_raw.empty:
+        # 对齐到 ICU stay（按 hadm_id 并用窗口筛选）
+        lab = lab_raw.merge(cohort_by_hadm.reset_index(), on="hadm_id", how="inner")
+        lab = lab[(lab["charttime"] >= lab["win_start"]) & (lab["charttime"] <= lab["win_end"])]
+        # itemid -> variable
+        inv_l = {iid: var for var, ids in lab_map.items() for iid in ids}
+        lab["variable"] = lab["itemid"].map(inv_l)
+        lab = lab.dropna(subset=["variable"])
+        # 需要带回 stay_id：用 hadm_id→一对多的 stay（理论上一个 hadm 通常对应一个 ICU stay；如多 stay 则可能重复）
+        lab = lab.merge(cohort2[["stay_id","hadm_id"]], on="hadm_id", how="left")
+        lab_df = lab[["stay_id","hadm_id","charttime","variable","value"]].dropna(subset=["stay_id"])
+        lab_df = lab_df.astype({"stay_id": "int64"}).sort_values(["stay_id","charttime"])
+
+    lab_df.to_parquet(out_labs, index=False)
+    lg.info(f"labs saved: {out_labs} | rows={len(lab_df)} | vars={sorted(lab_df['variable'].unique().tolist()) if len(lab_df)>0 else []}")
+
+    return out_vitals, out_labs
+
+if __name__ == "__main__":
+    v, l = extract_vitals_labs()
+    print(v)
+    print(l)

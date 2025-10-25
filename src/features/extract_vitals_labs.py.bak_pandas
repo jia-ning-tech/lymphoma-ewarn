@@ -1,0 +1,405 @@
+from __future__ import annotations
+
+import os
+from typing import Dict, List, Tuple, Iterable
+
+import duckdb
+import pandas as pd
+import numpy as np
+
+from ..config import get_cfg
+from ..utils.log import get_logger, heartbeat, progress_bar
+
+# ---------------------- helpers: discover itemids ---------------------- #
+
+VITAL_KEYWORDS: Dict[str, List[str]] = {
+    "heart_rate": ["Heart Rate"],
+    "resp_rate": ["Respiratory Rate"],
+    "spo2": ["SpO2", "O2 saturation", "SaO2"],
+    "temperature": ["Temperature Fahrenheit", "Temperature Celsius", "Temperature"],
+    "sbp": ["Non Invasive Blood Pressure systolic", "Invasive BP Systolic", "Arterial Blood Pressure systolic"],
+    "dbp": ["Non Invasive Blood Pressure diastolic", "Invasive BP Diastolic", "Arterial Blood Pressure diastolic"],
+    "mbp": ["Non Invasive Blood Pressure mean", "Invasive BP Mean", "Arterial Blood Pressure mean"],
+    "fio2": ["FiO2"],
+    "peep": ["PEEP"],
+}
+
+LAB_KEYWORDS: Dict[str, List[str]] = {
+    "lactate": ["Lactate"],
+    "ph": ["pH"],
+    "paco2": ["pCO2"],
+    "pao2": ["pO2"],
+    "hco3": ["Bicarbonate"],
+    "na": ["Sodium"],
+    "k": ["Potassium"],
+    "cl": ["Chloride"],
+    "ca": ["Calcium"],
+    "bun": ["Urea Nitrogen", "BUN"],
+    "creatinine": ["Creatinine"],
+    "ast": ["AST"],
+    "alt": ["ALT"],
+    "tbil": ["Bilirubin, Total", "Total Bilirubin"],
+    "alb": ["Albumin"],
+    "inr": ["INR"],
+    "pt": ["PT"],
+    "aptt": ["aPTT", "APTT"],
+    "wbc": ["WBC"],
+    "hgb": ["Hemoglobin"],
+    "platelet": ["Platelet", "Platelets"],
+}
+
+def _discover_itemids_d_items(cfg, patterns: Dict[str, List[str]]) -> Dict[str, List[int]]:
+    lg = get_logger("features.extract")
+    d_items = os.path.join(cfg.paths.raw_icu, "d_items.csv")
+    if not os.path.exists(d_items):
+        raise FileNotFoundError(f"Missing {d_items}.")
+    di = pd.read_csv(d_items)
+    di["label"] = di["label"].astype(str).str.strip().str.lower()
+
+    out: Dict[str, List[int]] = {}
+    for var, kws in patterns.items():
+        hits = pd.Series(False, index=di.index)
+        for kw in kws:
+            hits = hits | di["label"].str.contains(str(kw).lower(), na=False)
+        itemids = di.loc[hits, "itemid"].dropna().astype(int).tolist()
+        out[var] = sorted(set(itemids))
+        lg.info(f"[discover] chartevents {var}: {len(itemids)} itemids")
+    return out
+
+def _discover_itemids_d_labitems(cfg, patterns: Dict[str, List[str]]) -> Dict[str, List[int]]:
+    lg = get_logger("features.extract")
+    d_lab = os.path.join(cfg.paths.raw_hosp, "d_labitems.csv")
+    if not os.path.exists(d_lab):
+        raise FileNotFoundError(f"Missing {d_lab}.")
+    dl = pd.read_csv(d_lab)
+    dl["label"] = dl["label"].astype(str).str.strip().str.lower()
+
+    out: Dict[str, List[int]] = {}
+    for var, kws in patterns.items():
+        hits = pd.Series(False, index=dl.index)
+        for kw in kws:
+            hits = hits | dl["label"].str.contains(str(kw).lower(), na=False)
+        itemids = dl.loc[hits, "itemid"].dropna().astype(int).tolist()
+        out[var] = sorted(set(itemids))
+        lg.info(f"[discover] labevents {var}: {len(itemids)} itemids")
+    return out
+
+# ---------------------- core utils ---------------------- #
+
+def _ensure_paths(cfg):
+    os.makedirs(cfg.paths.interim, exist_ok=True)
+    os.makedirs(cfg.paths.features, exist_ok=True)
+
+def _read_cohort(cfg) -> pd.DataFrame:
+    path = os.path.join(cfg.paths.interim, "cohort.parquet")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing cohort: {path}")
+    df = pd.read_parquet(path)
+    for c in ["icu_in", "icu_out"]:
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df[["subject_id","hadm_id","stay_id","icu_in","icu_out"]]
+
+def _chunks(lst: List[int], n: int) -> Iterable[List[int]]:
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
+
+def _make_conn() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect(database=":memory:")
+    con.execute("PRAGMA threads=4")
+    return con
+
+def _normalize_numeric_and_time(df: pd.DataFrame) -> pd.DataFrame:
+    """统一列名并数值化；返回列：stay_id/hadm_id, charttime, itemid, value"""
+    if df.empty:
+        return df
+    cols = {c.lower(): c for c in df.columns}
+
+    # 时间列
+    tcol = None
+    for cand in ["charttime", "chart_time", "chart_time_utc", "storetime", "store_time"]:
+        if cand in cols:
+            tcol = cols[cand]; break
+    if tcol is None:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","itemid","value"])
+    # 数值列
+    vcol = None
+    for cand in ["valuenum", "value", "valuetext", "value_num"]:
+        if cand in cols:
+            vcol = cols[cand]; break
+    if vcol is None:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","itemid","value"])
+    # 其他列
+    itemid_col = cols.get("itemid", None)
+    stay_col   = cols.get("stay_id", None)
+    hadm_col   = cols.get("hadm_id", None)
+
+    keep = []
+    if stay_col: keep.append(stay_col)
+    if hadm_col: keep.append(hadm_col)
+    keep += [tcol]
+    if itemid_col: keep.append(itemid_col)
+    keep += [vcol]
+
+    out = df[keep].copy()
+    out.rename(columns={tcol: "charttime"}, inplace=True)
+    if itemid_col:
+        out.rename(columns={itemid_col: "itemid"}, inplace=True)
+    out.rename(columns={vcol: "value"}, inplace=True)
+
+    # 类型转换
+    out["charttime"] = pd.to_datetime(out["charttime"], errors="coerce")
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    out = out.dropna(subset=["charttime", "value"])
+    if "itemid" in out.columns:
+        out["itemid"] = pd.to_numeric(out["itemid"], errors="coerce").astype("Int64")
+        out = out.dropna(subset=["itemid"])
+        out["itemid"] = out["itemid"].astype(int)
+
+    cols_final = ["charttime","itemid","value"]
+    if "stay_id" in out.columns: cols_final = ["stay_id"] + cols_final
+    if "hadm_id" in out.columns: cols_final = ["hadm_id"] + cols_final
+    return out[cols_final]
+
+def _itemid_inverse_map(itemid_map: Dict[str, List[int]]) -> Dict[int, str]:
+    inv = {}
+    for var, ids in itemid_map.items():
+        for iid in ids:
+            inv[int(iid)] = var
+    return inv
+
+# ---------------------- DuckDB branch ---------------------- #
+
+def _values_clause(int_list: List[int]) -> str:
+    return ",".join(f"({int(x)})" for x in int_list)
+
+def _duckdb_vitals_chunk(cfg, conn, stay_ids: List[int], itemid_map: Dict[str, List[int]], pad_hours: int, lg) -> pd.DataFrame:
+    chartevents_path = os.path.join(cfg.paths.raw_icu, "chartevents.csv")
+    all_itemids = sorted({iid for ids in itemid_map.values() for iid in ids})
+    if not os.path.exists(chartevents_path) or not stay_ids or not all_itemids:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+
+    sql = f"""
+    WITH
+      s(stay_id) AS (VALUES {_values_clause(stay_ids)}),
+      it(itemid) AS (VALUES {_values_clause(all_itemids)})
+    SELECT
+      CAST(ce.stay_id AS BIGINT)  AS stay_id,
+      CAST(ce.hadm_id AS BIGINT)  AS hadm_id,
+      ce.charttime, ce.storetime,
+      CAST(ce.itemid  AS BIGINT)  AS itemid,
+      ce.valuenum, ce.value
+    FROM read_csv_auto('{chartevents_path}', SAMPLE_SIZE=-1, ALL_VARCHAR=FALSE) AS ce
+    JOIN s  ON CAST(ce.stay_id AS BIGINT) = s.stay_id
+    JOIN it ON CAST(ce.itemid  AS BIGINT) = it.itemid
+    """
+    conn.execute(sql)
+    raw = conn.fetch_df()
+    lg.info(f"[debug] duckdb vitals raw rows={len(raw)} for batch={len(stay_ids)}")
+    return _normalize_numeric_and_time(raw)
+
+def _duckdb_labs_chunk(cfg, conn, hadm_ids: List[int], itemid_map: Dict[str, List[int]], pad_hours: int, lg) -> pd.DataFrame:
+    labevents_path = os.path.join(cfg.paths.raw_hosp, "labevents.csv")
+    all_itemids = sorted({iid for ids in itemid_map.values() for iid in ids})
+    if not os.path.exists(labevents_path) or not hadm_ids or not all_itemids:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+
+    sql = f"""
+    WITH
+      h(hadm_id) AS (VALUES {_values_clause(hadm_ids)}),
+      it(itemid)  AS (VALUES {_values_clause(all_itemids)})
+    SELECT
+      CAST(le.hadm_id AS BIGINT)  AS hadm_id,
+      le.charttime, le.storetime,
+      CAST(le.itemid  AS BIGINT)  AS itemid,
+      le.valuenum, le.value, le.valuetext
+    FROM read_csv_auto('{labevents_path}', SAMPLE_SIZE=-1, ALL_VARCHAR=FALSE) AS le
+    JOIN h  ON CAST(le.hadm_id AS BIGINT) = h.hadm_id
+    JOIN it ON CAST(le.itemid  AS BIGINT) = it.itemid
+    """
+    conn.execute(sql)
+    raw = conn.fetch_df()
+    lg.info(f"[debug] duckdb labs raw rows={len(raw)} for batch={len(hadm_ids)}")
+    return _normalize_numeric_and_time(raw)
+
+# ---------------------- Pandas fallback (streaming) ---------------------- #
+
+def _pandas_stream_filter(path: str,
+                          key_cols: List[str],
+                          keep_sets: List[set],
+                          cols: List[str],
+                          chunksize: int = 500_000) -> pd.DataFrame:
+    """在 Pandas 端按 key 列集合过滤；只读取必要列，流式拼接"""
+    usecols = [c for c in cols if c is not None]
+    out = []
+    for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize, low_memory=False):
+        keep = np.ones(len(chunk), dtype=bool)
+        for col, s in zip(key_cols, keep_sets):
+            if col in chunk.columns:
+                # 尽量转为数值（防止 '123' 与 123 不等）
+                tmp = pd.to_numeric(chunk[col], errors="coerce")
+                keep &= tmp.isin(list(s))
+        if keep.any():
+            part = chunk.loc[keep].copy()
+            out.append(part)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=usecols)
+
+# ---------------------- high level extractors ---------------------- #
+
+def _extract_vitals_chunk(cfg, conn, stay_ids: List[int], itemid_map: Dict[str, List[int]], pad_hours: int, lg) -> pd.DataFrame:
+    """先 DuckDB，若此批 0 行则回退 Pandas 过滤"""
+    chartevents_path = os.path.join(cfg.paths.raw_icu, "chartevents.csv")
+    if not os.path.exists(chartevents_path):
+        raise FileNotFoundError(f"Missing {chartevents_path}")
+
+    # DuckDB try
+    try:
+        df = _duckdb_vitals_chunk(cfg, conn, stay_ids, itemid_map, pad_hours, lg)
+    except Exception as e:
+        lg.warning(f"DuckDB vitals chunk error (n={len(stay_ids)}): {e}")
+        df = pd.DataFrame()
+
+    if df is None or df.empty:
+        # Pandas fallback
+        lg.info(f"[fallback] pandas vitals for batch={len(stay_ids)}")
+        all_itemids = sorted({iid for ids in itemid_map.values() for iid in ids})
+        key_cols = ["stay_id", "itemid", "charttime", "hadm_id", "value", "valuenum", "storetime"]
+        cols = [c for c in key_cols if c]  # remove Nones
+        raw = _pandas_stream_filter(
+            path=chartevents_path,
+            key_cols=["stay_id", "itemid"],
+            keep_sets=[set(stay_ids), set(all_itemids)],
+            cols=cols,
+            chunksize=500_000,
+        )
+        df = _normalize_numeric_and_time(raw)
+
+    if df.empty:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+
+    # stay 时间窗过滤（加前后 pad）
+    cohort = _read_cohort(cfg).set_index("stay_id").loc[stay_ids]
+    cohort = cohort.reset_index()
+    cohort["win_start"] = cohort["icu_in"] - pd.Timedelta(hours=pad_hours)
+    cohort["win_end"]   = cohort["icu_out"] + pd.Timedelta(hours=pad_hours)
+    df = df.merge(cohort[["stay_id","win_start","win_end"]], on="stay_id", how="inner")
+    df = df[(df["charttime"] >= df["win_start"]) & (df["charttime"] <= df["win_end"])]
+
+    # itemid -> variable
+    inv_map = _itemid_inverse_map(itemid_map)
+    df["variable"] = df["itemid"].map(inv_map)
+    df = df.dropna(subset=["variable"])
+
+    out = df[["stay_id","hadm_id","charttime","variable","value"]].sort_values(["stay_id","charttime"])
+    return out
+
+def _extract_labs_chunk(cfg, conn, hadm_ids: List[int], itemid_map: Dict[str, List[int]], pad_hours: int, lg) -> pd.DataFrame:
+    """先 DuckDB，若此批 0 行则回退 Pandas 过滤"""
+    labevents_path = os.path.join(cfg.paths.raw_hosp, "labevents.csv")
+    if not os.path.exists(labevents_path):
+        raise FileNotFoundError(f"Missing {labevents_path}")
+
+    # DuckDB try
+    try:
+        df = _duckdb_labs_chunk(cfg, conn, hadm_ids, itemid_map, pad_hours, lg)
+    except Exception as e:
+        lg.warning(f"DuckDB labs chunk error (n={len(hadm_ids)}): {e}")
+        df = pd.DataFrame()
+
+    if df is None or df.empty:
+        # Pandas fallback
+        lg.info(f"[fallback] pandas labs for batch={len(hadm_ids)}")
+        all_itemids = sorted({iid for ids in itemid_map.values() for iid in ids})
+        key_cols = ["hadm_id", "itemid", "charttime", "value", "valuenum", "valuetext", "storetime"]
+        cols = [c for c in key_cols if c]
+        raw = _pandas_stream_filter(
+            path=labevents_path,
+            key_cols=["hadm_id", "itemid"],
+            keep_sets=[set(hadm_ids), set(all_itemids)],
+            cols=cols,
+            chunksize=400_000,
+        )
+        df = _normalize_numeric_and_time(raw)
+
+    if df.empty:
+        return pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"])
+
+    # lab 与 ICU stay 对齐：按 hadm_id 关联，再用 ICU 窗口 +/- pad 过滤
+    cohort = _read_cohort(cfg)[["stay_id","hadm_id","icu_in","icu_out"]]
+    cohort["win_start"] = cohort["icu_in"] - pd.Timedelta(hours=pad_hours)
+    cohort["win_end"]   = cohort["icu_out"] + pd.Timedelta(hours=pad_hours)
+    df = df.merge(cohort[["stay_id","hadm_id","win_start","win_end"]], on="hadm_id", how="inner")
+    df = df[(df["charttime"] >= df["win_start"]) & (df["charttime"] <= df["win_end"])]
+
+    # itemid -> variable
+    inv_map = _itemid_inverse_map(itemid_map)
+    df["variable"] = df["itemid"].map(inv_map)
+    df = df.dropna(subset=["variable"])
+
+    out = df[["stay_id","hadm_id","charttime","variable","value"]].sort_values(["stay_id","charttime"])
+    return out
+
+# ---------------------- main entry ---------------------- #
+
+def extract_vitals_labs(save_paths: Tuple[str, str] | None = None,
+                        pad_hours: int = 6) -> Tuple[str, str]:
+    cfg = get_cfg()
+    lg = get_logger("features.extract")
+    _ensure_paths(cfg)
+
+    out_vitals = os.path.join(cfg.paths.interim, "ts_vitals.parquet")
+    out_labs   = os.path.join(cfg.paths.interim, "ts_labs.parquet")
+    if save_paths:
+        out_vitals, out_labs = save_paths
+
+    cohort = _read_cohort(cfg)
+    stay_ids = cohort["stay_id"].astype(int).tolist()
+    hadm_ids = cohort["hadm_id"].astype(int).tolist()
+
+    vit_map = _discover_itemids_d_items(cfg, VITAL_KEYWORDS)
+    lab_map = _discover_itemids_d_labitems(cfg, LAB_KEYWORDS)
+
+    conn = _make_conn()
+
+    # VITALS（按 stay 分批）
+    lg.info("Extracting ICU vitals from icu/chartevents.csv ...")
+    vit_chunks = []
+    chunk_size = int(cfg.parallel.get("chunk_stays", 256))
+    with heartbeat(lg, secs=int(cfg.logging.heartbeat_secs), note="extract vitals"):
+        batches = list(_chunks(stay_ids, chunk_size))
+        for chunk in progress_bar(batches, total=len(batches), desc="vitals chunks"):
+            try:
+                part = _extract_vitals_chunk(cfg, conn, chunk, vit_map, pad_hours, lg)
+                if not part.empty:
+                    vit_chunks.append(part)
+            except Exception as e:
+                lg.warning(f"vitals chunk failed (n={len(chunk)}): {e}")
+
+    vit_df = (pd.concat(vit_chunks, ignore_index=True) if vit_chunks
+              else pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"]))
+    vit_df.to_parquet(out_vitals, index=False)
+    lg.info(f"vitals saved: {out_vitals} | rows={len(vit_df)} | vars={sorted(vit_df['variable'].unique().tolist()) if len(vit_df)>0 else []}")
+
+    # LABS（按 hadm 分批）
+    lg.info("Extracting hospital labs from hosp/labevents.csv ...")
+    lab_chunks = []
+    with heartbeat(lg, secs=int(cfg.logging.heartbeat_secs), note="extract labs"):
+        batches = list(_chunks(hadm_ids, chunk_size))
+        for chunk in progress_bar(batches, total=len(batches), desc="labs chunks"):
+            try:
+                part = _extract_labs_chunk(cfg, conn, chunk, lab_map, pad_hours, lg)
+                if not part.empty:
+                    lab_chunks.append(part)
+            except Exception as e:
+                lg.warning(f"labs chunk failed (n={len(chunk)}): {e}")
+
+    lab_df = (pd.concat(lab_chunks, ignore_index=True) if lab_chunks
+              else pd.DataFrame(columns=["stay_id","hadm_id","charttime","variable","value"]))
+    lab_df.to_parquet(out_labs, index=False)
+    lg.info(f"labs saved: {out_labs} | rows={len(lab_df)} | vars={sorted(lab_df['variable'].unique().tolist()) if len(lab_df)>0 else []}")
+
+    return out_vitals, out_labs
+
+if __name__ == "__main__":
+    v, l = extract_vitals_labs()
+    print(v)
+    print(l)
