@@ -123,3 +123,27 @@ inject-ablation:
 ## readme-ablation: 先画图（若需要）再注入
 readme-ablation: ablation-plots inject-ablation
 	@echo "[Makefile] README ablation updated."
+
+
+# === Sync selected figures to docs/figures for GitHub rendering ===
+DOCS_FIG := docs/figures
+.PHONY: sync-figs
+sync-figs:
+	@mkdir -p $(DOCS_FIG)
+	# 你想公开展示的少量关键图（请按需增减）
+	@cp -f outputs/figures/roc_h24_test.png        $(DOCS_FIG)/roc_h24_test.png || true
+	@cp -f outputs/figures/pr_h24_test.png         $(DOCS_FIG)/pr_h24_test.png || true
+	@cp -f outputs/figures/roc_h48_test.png        $(DOCS_FIG)/roc_h48_test.png || true
+	@cp -f outputs/figures/pr_h48_test.png         $(DOCS_FIG)/pr_h48_test.png || true
+	@cp -f outputs/figures/calibration_h24_test_window.png $(DOCS_FIG)/calib_h24_window.png || true
+	@cp -f outputs/figures/calibration_h48_test_window.png $(DOCS_FIG)/calib_h48_window.png || true
+	@cp -f outputs/figures/shap_global_beeswarm_h48_test.png $(DOCS_FIG)/shap_beeswarm_h48.png || true
+	@cp -f outputs/figures/shap_global_bar_h48_test.png      $(DOCS_FIG)/shap_bar_h48.png || true
+	@cp -f outputs/figures/leadtime_box_h48_test_thr0.2414.png  $(DOCS_FIG)/leadtime_box_h48.png || true
+	@cp -f outputs/figures/leadtime_hist_h48_test_thr0.2414.png $(DOCS_FIG)/leadtime_hist_h48.png || true
+	@echo "[Makefile] Copied selected figures to docs/figures"
+
+# 一键：同步图 + 重新注入结构 + 注入消融块
+.PHONY: publish-readme
+publish-readme: sync-figs structure inject-structure inject-ablation
+	@echo "[Makefile] README materials refreshed."

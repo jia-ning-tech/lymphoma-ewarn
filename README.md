@@ -8,6 +8,7 @@
   <img alt="CI" src="https://img.shields.io/badge/Status-Research%20Prototype-lightgrey" />
   <img alt="PRs" src="https://img.shields.io/badge/PRs-welcome-brightgreen" />
   <img alt="Love" src="https://img.shields.io/badge/Made%20with-%E2%9D%A4%EF%B8%8F-red" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-informational" />
 </p>
 
 <h1 align="center">Lymphoma-EWARN: Early Warning for Deterioration in ICU Lymphoma Patients</h1>
@@ -92,12 +93,16 @@ python -m src.cli.plot_curves --horizon 24 --split test
 python -m src.cli.plot_curves --horizon 48 --split test
 ```
 
+
+
+
 <div align="center">
-  <img src="outputs/figures/roc_h24_test.png" alt="ROC 24h" width="45%"/>
-  <img src="outputs/figures/pr_h24_test.png" alt="PR 24h" width="45%"/><br/><br/>
-  <img src="outputs/figures/roc_h48_test.png" alt="ROC 48h" width="45%"/>
-  <img src="outputs/figures/pr_h48_test.png" alt="PR 48h" width="45%"/>
+  <img src="docs/figures/roc_h24_test.png" alt="ROC 24h" width="45%"/>
+  <img src="docs/figures/pr_h24_test.png"  alt="PR 24h"  width="45%"/><br/><br/>
+  <img src="docs/figures/roc_h48_test.png" alt="ROC 48h" width="45%"/>
+  <img src="docs/figures/pr_h48_test.png"  alt="PR 48h"  width="45%"/>
 </div>
+
 
 ### 3.2 Calibration
 
@@ -670,6 +675,34 @@ We are grateful to our clinical collaborators and the open-source community (sci
 > *With humility:* we see this as a starting point—not an endpoint—towards transparent, reliable early-warning tools that can one day assist clinicians and benefit patients.
 
 > We know there is still much to improve. If you notice issues or have ideas, we sincerely welcome discussions and pull requests. Thank you for your patience and feedback. 🙏
+
+---
+## 9. Limitations
+
+* Single-center cohort with lymphoma patients; generalizability to other centers/populations remains to be validated.
+* Retrospective labeling and windowing may introduce time-alignment biases.
+* Class imbalance is substantial; alert-rate–based thresholding can still yield non-trivial false alarms at stay level.
+* We only explored RandomForest in depth; stronger gradient-boosting or temporal models (e.g., XGBoost, LightGBM, RNN/Transformer) may further improve performance.
+
+## 10. Ethics & Data Access
+
+This work uses MIMIC-style ICU data under the corresponding data use agreement. Access requires credentialed researchers to complete the dataset’s required training and approval process. **We do not redistribute raw patient data.** All experiments in this repo operate on derived, de-identified tables generated locally. For any clinical deployment, institutional review, safety assessments, and governance are mandatory.
+
+---
+
+## 11. License & Citation
+
+**License.** Released under the MIT License (see `LICENSE`).
+
+**Citation.** If you use this repository, please cite:
+
+```bibtex
+@misc{lymphoma_ewarn_2025,
+  title   = {Lymphoma-EWARN: Early Warning for Deterioration in ICU Lymphoma Patients},
+  author  = {Jia Ning and collaborators},
+  year    = {2025},
+  howpublished = {\url{https://github.com/jia-ning-tech/lymphoma-ewarn}}
+}
 
 ---
 
