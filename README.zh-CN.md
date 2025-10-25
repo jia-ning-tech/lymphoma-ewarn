@@ -124,6 +124,21 @@ python -m src.cli.calibration_plot --horizon 24 --split test --bins 20 --strateg
 python -m src.cli.calibration_plot --horizon 48 --split test --bins 20 --strategy uniform --stay_level
 ```
 
+<!-- THRESHOLDS_START -->
+
+### Decision Thresholds (auto-generated)
+
+| Horizon | Method   | Chosen Threshold | Source JSON |
+|:-------:|:--------:|:----------------:|:------------|
+| 24h | isotonic | **0.0577** | `outputs/reports/posthoc_calibration_h24_isotonic.json` |
+| 24h | sigmoid | **0.0369** | `outputs/reports/posthoc_calibration_h24_sigmoid.json` |
+| 48h | isotonic | **0.0544** | `outputs/reports/posthoc_calibration_h48_isotonic.json` |
+| 48h | sigmoid | **0.0355** | `outputs/reports/posthoc_calibration_h48_sigmoid.json` |
+
+<!-- THRESHOLDS_END -->
+
+
+
 ### 3.3 领先时间（Lead Time, Test）
 
 | Horizon |  n | 均值(h) | 中位数(h) |  P10 |  P25 |   P75 |   P90 |   Max |

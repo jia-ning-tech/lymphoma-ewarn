@@ -147,3 +147,21 @@ sync-figs:
 .PHONY: publish-readme
 publish-readme: sync-figs structure inject-structure inject-ablation
 	@echo "[Makefile] README materials refreshed."
+
+
+
+## ---- Auto thresholds snippet for README (no heredoc) ----
+.PHONY: thresholds-md inject-thresholds readme-thresholds
+
+# 生成 Markdown 片段：outputs/docs/thresholds_for_readme.md
+thresholds-md:
+	@mkdir -p outputs/docs
+	@$(PY) scripts/mk_threshold_snippets.py
+
+# 注入到 README 与 README.zh-CN（锚点不存在则自动追加到文末）
+inject-thresholds: thresholds-md
+	@$(PY) scripts/inject_thresholds.py
+
+# 一键：生成 + 注入
+readme-thresholds: inject-thresholds
+	@echo "[Makefile] Thresholds snippet refreshed and injected."
