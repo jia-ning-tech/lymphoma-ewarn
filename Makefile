@@ -60,3 +60,66 @@ readme: structure inject-structure
 clean-structure:
 	rm -f $(STRUCT_MD)
 	@echo "[Makefile] Removed $(STRUCT_MD)"
+
+
+# ---------------- Ablation plotting ----------------
+# 可配置参数
+AB_HORIZONS ?= 24,48
+REPORTS_DIR ?= outputs/reports
+FIG_DIR     ?= outputs/figures
+
+.PHONY: ablation-plots show-ablation clean-ablation
+
+## ablation-plots: 读取 $(REPORTS_DIR)/ablation_h{h}.csv 并生成森林图/柱状图到 $(FIG_DIR)
+ablation-plots:
+	@echo "[Makefile] Plotting ablation for horizons=$(AB_HORIZONS)"
+	@$(PY) scripts/plot_ablation.py --horizons $(AB_HORIZONS) --reports_dir $(REPORTS_DIR) --fig_dir $(FIG_DIR)
+
+## show-ablation: 快速查看已生成的消融图片与用于 README 的整洁表
+show-ablation:
+	@echo "---- Figures ----"
+	@ls -1 $(FIG_DIR)/ablation_* 2>/dev/null || echo "(no ablation figures yet)"
+	@echo ""
+	@echo "---- Tidy CSV for README ----"
+	@ls -1 $(REPORTS_DIR)/ablation_*tidy_for_readme.csv 2>/dev/null || echo "(no tidy csv yet)"
+
+## clean-ablation: 清理消融图片（不动 ablation_h{h}.csv 原始结果）
+clean-ablation:
+	@rm -f $(FIG_DIR)/ablation_*_bar.png $(FIG_DIR)/ablation_*_forest.png || true
+	@echo "[Makefile] cleaned ablation figures under $(FIG_DIR)"
+
+
+# ---------------- Inject ablation section into README ----------------
+AB_REPORTS_DIR ?= outputs/reports
+AB_FIG_DIR     ?= outputs/figures
+AB_OUT_DIR     ?= outputs/docs
+
+AB_EN_MD := $(AB_OUT_DIR)/ablation_section.md
+AB_ZH_MD := $(AB_OUT_DIR)/ablation_section_zh.md
+
+.PHONY: ablation-md inject-ablation readme-ablation
+
+## ablation-md: 仅生成 Markdown 片段（不改 README）
+ablation-md:
+	@mkdir -p $(AB_OUT_DIR)
+	@$(PY) scripts/inject_ablation.py \
+		--reports_dir $(AB_REPORTS_DIR) \
+		--fig_dir $(AB_FIG_DIR) \
+		--out_dir $(AB_OUT_DIR) \
+		--emit_only
+	@echo "[Makefile] Generated: $(AB_EN_MD) and $(AB_ZH_MD)"
+
+## inject-ablation: 生成片段 + 注入到 README 和 README.zh-CN.md
+inject-ablation:
+	@mkdir -p $(AB_OUT_DIR)
+	@$(PY) scripts/inject_ablation.py \
+		--reports_dir $(AB_REPORTS_DIR) \
+		--fig_dir $(AB_FIG_DIR) \
+		--out_dir $(AB_OUT_DIR) \
+		--readme README.md \
+		--readme_zh README.zh-CN.md
+	@echo "[Makefile] Ablation section injected into README files."
+
+## readme-ablation: 先画图（若需要）再注入
+readme-ablation: ablation-plots inject-ablation
+	@echo "[Makefile] README ablation updated."

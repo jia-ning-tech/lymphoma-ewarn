@@ -28,3 +28,11 @@ outputs/
 .ruff_cache/
 .ipynb_checkpoints/
 .DS_Store
+
+# --- Whitelist docs & figures for README ---
+!outputs/
+outputs/*
+!outputs/docs/
+!outputs/docs/*.md
+!outputs/figures/
+!outputs/figures/*.png
