@@ -1,101 +1,69 @@
+# src/eval/dca.py
 from __future__ import annotations
-import numpy as np
-import pandas as pd
 from dataclasses import dataclass
-from typing import Iterable, Optional
-
+from typing import Iterable, Optional, Dict
+import numpy as np
 
 @dataclass
 class DCAMetrics:
-    thresholds: np.ndarray
-    nb_model: np.ndarray
-    nb_all: np.ndarray
-    nb_none: np.ndarray
-    prevalence: float
+    thresholds: np.ndarray          # shape (T,)
+    nb_model: np.ndarray            # net benefit of model (per 'per' patients)
+    nb_all: np.ndarray              # treat-all
+    nb_none: np.ndarray             # zeros
+    prevalence: float               # y.mean()
+    per: int = 100                  # scaling factor for readability
 
-    def to_dataframe(self) -> pd.DataFrame:
-        return pd.DataFrame({
-            "threshold": self.thresholds,
-            "nb_model": self.nb_model,
-            "nb_all": self.nb_all,
-            "nb_none": self.nb_none,
-            "prevalence": self.prevalence,
-        })
-
-
-def _net_benefit(y_true: np.ndarray, y_pred_bin: np.ndarray, pt: float) -> float:
-    """
-    Net benefit = TP/N - FP/N * (pt / (1-pt))
-    """
-    assert 0.0 < pt < 1.0, "pt must be in (0,1)"
-    y = y_true.astype(int)
-    yhat = y_pred_bin.astype(int)
-    N = len(y)
-    tp = (yhat & (y == 1)).sum()
-    fp = (yhat & (y == 0)).sum()
-    return (tp / N) - (fp / N) * (pt / (1.0 - pt))
-
-
-def _net_benefit_treat_all(y_true: np.ndarray, pt: float) -> float:
-    """
-    Treat-all strategy: sensitivity=1, specificity=0  => NB_all = prevalence - (1-prevalence) * (pt/(1-pt))
-    """
-    y = y_true.astype(int)
-    prev = y.mean()
-    return prev - (1.0 - prev) * (pt / (1.0 - pt))
-
+def _check_inputs(y: np.ndarray, p: np.ndarray):
+    y = np.asarray(y).astype(int)
+    p = np.asarray(p).astype(float)
+    assert set(np.unique(y)).issubset({0, 1}), "y must be binary in {0,1}"
+    assert p.ndim == 1 and y.shape[0] == p.shape[0], "y and p length mismatch"
+    return y, p
 
 def decision_curve(
     y_true: np.ndarray,
-    y_score: np.ndarray,
+    y_prob: np.ndarray,
     thresholds: Optional[Iterable[float]] = None,
-    per_100: bool = False,
+    per: int = 100,
 ) -> DCAMetrics:
     """
-    Compute decision curve analysis metrics.
-
-    Parameters
-    ----------
-    y_true : array-like of shape (n_samples,)
-        Binary outcomes (0/1).
-    y_score : array-like of shape (n_samples,)
-        Predicted probabilities.
-    thresholds : iterable of floats in (0,1)
-        Thresholds at which to compute net benefit.
-    per_100 : bool
-        If True, multiply NB by 100 (per 100 patients).
-
-    Returns
-    -------
-    DCAMetrics
+    Compute decision curve analysis arrays.
+    Net benefit formula (Vickers): NB = TPR - FPR * (pt/(1-pt)),
+    where TPR = TP/N, FPR = FP/N. 'per' is a final display scaling (e.g., 100).
     """
-    y = np.asarray(y_true, dtype=int)
-    p = np.asarray(y_score, dtype=float)
-    mask = ~np.isnan(p)
-    y = y[mask]
-    p = p[mask]
+    y, p = _check_inputs(y_true, y_prob)
+    n = float(len(y))
+    prev = float(y.mean())
+
     if thresholds is None:
-        thresholds = np.linspace(0.01, 0.99, 99)
-    thr = np.asarray(list(thresholds), dtype=float)
-    nb_model = np.zeros_like(thr, dtype=float)
-    nb_all = np.zeros_like(thr, dtype=float)
-    nb_none = np.zeros_like(thr, dtype=float)
+        thresholds = np.linspace(1e-4, 0.9999, 200)
+    thr = np.asarray(thresholds, dtype=float)
 
+    nb_model = np.zeros_like(thr)
     for i, t in enumerate(thr):
-        yhat = (p >= t).astype(int)
-        nb_model[i] = _net_benefit(y, yhat, t)
-        nb_all[i] = _net_benefit_treat_all(y, t)
-        nb_none[i] = 0.0
+        pred = (p >= t).astype(int)
+        tp = float((pred == 1).sum() and np.logical_and(pred == 1, y == 1).sum())
+        fp = float((pred == 1).sum() and np.logical_and(pred == 1, y == 0).sum())
+        # 转为率
+        tpr = tp / n
+        fpr = fp / n
+        w = t / (1.0 - t)
+        nb_model[i] = tpr - fpr * w
 
-    if per_100:
-        nb_model *= 100.0
-        nb_all *= 100.0
-        nb_none *= 100.0
+    w_all = thr / (1.0 - thr)
+    nb_all = prev - (1.0 - prev) * w_all
+    nb_none = np.zeros_like(thr)
+
+    if per is not None and per != 1:
+        nb_model = nb_model * per
+        nb_all = nb_all * per
+        nb_none = nb_none * per
 
     return DCAMetrics(
         thresholds=thr,
         nb_model=nb_model,
         nb_all=nb_all,
         nb_none=nb_none,
-        prevalence=float(y.mean()),
+        prevalence=prev,
+        per=per,
     )
