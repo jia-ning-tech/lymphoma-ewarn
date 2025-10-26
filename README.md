@@ -1,3 +1,57 @@
+<!-- BADGES_START -->
+
+[🇨🇳 中文版](README.zh-CN.md) ｜ [⭐ Star](https://github.com/jia-ning-tech/lymphoma-ewarn/stargazers) ｜ [�� Issues](https://github.com/jia-ning-tech/lymphoma-ewarn/issues)
+
+![GitHub Repo stars](https://img.shields.io/github/stars/jia-ning-tech/lymphoma-ewarn?style=flat)
+![GitHub issues](https://img.shields.io/github/issues/jia-ning-tech/lymphoma-ewarn?style=flat)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Release](https://img.shields.io/github/v/release/jia-ning-tech/lymphoma-ewarn?display_name=tag&sort=semver)
+
+<!-- BADGES_END -->
+
+<!-- TOC_START -->
+
+## Table of Contents
+
+- [Table of Contents](#table-of-contents)
+- [TL;DR — Highlights](#tldr-highlights)
+- [1. Abstract](#1-abstract)
+- [2. Methods](#2-methods)
+  - [2.1 Cohort & Feature Windows](#21-cohort-feature-windows)
+  - [2.2 Models & Training](#22-models-training)
+  - [2.3 Evaluation Metrics](#23-evaluation-metrics)
+- [3. Results](#3-results)
+  - [3.1 Discrimination (Window-level, Test)](#31-discrimination-window-level-test)
+  - [3.2 Calibration](#32-calibration)
+  - [Decision Thresholds (auto-generated)](#decision-thresholds-auto-generated)
+  - [3.3 Lead Time (Test)](#33-lead-time-test)
+  - [3.4 Interpretability (SHAP)](#34-interpretability-shap)
+  - [3.5 Error Analysis (Test Example)](#35-error-analysis-test-example)
+  - [3.6 Ablation (24h, 5-fold, 600 trees)](#36-ablation-24h-5-fold-600-trees)
+  - [Keep-only (use only one group)](#keep-only-use-only-one-group)
+  - [Drop-one (remove one group from the full set)](#drop-one-remove-one-group-from-the-full-set)
+- [Ablation Studies](#ablation-studies)
+  - [Ablation (h=24)](#ablation-h24)
+- [4. Repository Layout & Project Structure](#4-repository-layout-project-structure)
+- [Project Structure](#project-structure)
+  - [Key Directories (auto-generated)](#key-directories-auto-generated)
+  - [Full Tree (auto-generated)](#full-tree-auto-generated)
+- [5. How to Reproduce](#5-how-to-reproduce)
+  - [5.1 Environment](#51-environment)
+  - [5.2 End-to-End Steps](#52-end-to-end-steps)
+- [6. Repository Guide](#6-repository-guide)
+- [7. Roadmap](#7-roadmap)
+- [8. Acknowledgements & Disclaimer](#8-acknowledgements-disclaimer)
+- [9. Limitations](#9-limitations)
+- [10. Ethics & Data Access](#10-ethics-data-access)
+- [11. License & Citation](#11-license-citation)
+- [Decision Curve Analysis (DCA)](#decision-curve-analysis-dca)
+  - [Decision Curve Analysis — h=24h, split=val](#decision-curve-analysis-h24h-splitval)
+  - [Decision Curve Analysis — h=24h, split=test](#decision-curve-analysis-h24h-splittest)
+  - [Decision Curve Analysis — h=48h, split=val](#decision-curve-analysis-h48h-splitval)
+  - [Decision Curve Analysis — h=48h, split=test](#decision-curve-analysis-h48h-splittest)
+
+<!-- TOC_END -->
 <!-- Badges / Shields -->
 
 <p align="center">
@@ -141,6 +195,7 @@ python -m src.cli.calibration_plot --horizon 48 --split test --bins 20 --strateg
 | 48h | sigmoid | **0.0355** | `outputs/reports/posthoc_calibration_h48_sigmoid.json` |
 
 <!-- THRESHOLDS_END -->
+
 
 
 

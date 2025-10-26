@@ -1,3 +1,51 @@
+<!-- BADGES_START -->
+
+[🇬🇧 English](README.md) ｜ [⭐ 收藏](https://github.com/jia-ning-tech/lymphoma-ewarn/stargazers) ｜ [🐛 问题](https://github.com/jia-ning-tech/lymphoma-ewarn/issues)
+
+![GitHub Repo stars](https://img.shields.io/github/stars/jia-ning-tech/lymphoma-ewarn?style=flat)
+![GitHub issues](https://img.shields.io/github/issues/jia-ning-tech/lymphoma-ewarn?style=flat)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Release](https://img.shields.io/github/v/release/jia-ning-tech/lymphoma-ewarn?display_name=tag&sort=semver)
+
+<!-- BADGES_END -->
+
+<!-- TOC_START -->
+
+## 目录
+
+- [目录](#目录)
+- [摘要 / Highlights](#摘要-highlights)
+- [1. 引言（Introduction）](#1-引言introduction)
+- [2. 方法（Methods）](#2-方法methods)
+  - [2.1 队列与窗口（Cohort & Windows）](#21-队列与窗口cohort-windows)
+  - [2.2 模型与训练（Models & Training）](#22-模型与训练models-training)
+  - [2.3 评价指标（Metrics）](#23-评价指标metrics)
+- [3. 结果（Results）](#3-结果results)
+  - [3.1 判别性能（窗口级，Test）](#31-判别性能窗口级test)
+  - [3.2 校准（Calibration）](#32-校准calibration)
+  - [Decision Thresholds (auto-generated)](#decision-thresholds-auto-generated)
+  - [3.3 领先时间（Lead Time, Test）](#33-领先时间lead-time-test)
+  - [3.4 可解释性（SHAP）](#34-可解释性shap)
+  - [3.5 错误分析（Error Analysis，test示例）](#35-错误分析error-analysistest示例)
+  - [3.6 消融实验（Ablation，24h, 5折, 600棵树）](#36-消融实验ablation24h-5折-600棵树)
+  - [Keep-only（仅保留某一组）](#keep-only仅保留某一组)
+  - [Drop-one（从全集移除某一组）](#drop-one从全集移除某一组)
+- [4. 仓库结构（Repository Layout & Project Structure）](#4-仓库结构repository-layout-project-structure)
+- [5. 复现实验（Reproducibility）](#5-复现实验reproducibility)
+  - [5.1 环境准备](#51-环境准备)
+  - [5.2 从曲线到解释的完整流程](#52-从曲线到解释的完整流程)
+- [6. 目录与功能导引（Repository Guide）](#6-目录与功能导引repository-guide)
+- [7. 路线图（Roadmap）](#7-路线图roadmap)
+- [8. 致谢与声明（Acknowledgements & Disclaimer）](#8-致谢与声明acknowledgements-disclaimer)
+- [消融实验](#消融实验)
+  - [消融研究（h=24）](#消融研究h24)
+- [决策曲线分析（DCA）](#决策曲线分析dca)
+  - [决策曲线分析（DCA）— 预测窗 24 小时，数据集：val](#决策曲线分析dca-预测窗-24-小时数据集val)
+  - [决策曲线分析（DCA）— 预测窗 24 小时，数据集：test](#决策曲线分析dca-预测窗-24-小时数据集test)
+  - [决策曲线分析（DCA）— 预测窗 48 小时，数据集：val](#决策曲线分析dca-预测窗-48-小时数据集val)
+  - [决策曲线分析（DCA）— 预测窗 48 小时，数据集：test](#决策曲线分析dca-预测窗-48-小时数据集test)
+
+<!-- TOC_END -->
 <!-- Badges / Shields -->
 
 <p align="center">
@@ -136,6 +184,7 @@ python -m src.cli.calibration_plot --horizon 48 --split test --bins 20 --strateg
 | 48h | sigmoid | **0.0355** | `outputs/reports/posthoc_calibration_h48_sigmoid.json` |
 
 <!-- THRESHOLDS_END -->
+
 
 
 

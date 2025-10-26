@@ -206,3 +206,14 @@ inject-dca:
 
 dca: dca-batch inject-dca
 	@echo "[Makefile] DCA done."
+
+# -------- README polishing (badges + TOC) --------
+.PHONY: readme-polish readme-all
+
+readme-polish:
+	@echo "[Makefile] Injecting badges + TOC to README..."
+	@python scripts/polish_readme.py
+
+# 串联：项目结构 + 消融 + DCA + 阈值片段 + 徽章/TOC
+readme-all: structure inject-structure ablation-md inject-ablation dca-batch inject-dca readme-thresholds readme-polish
+	@echo "[Makefile] README (ALL) done."
