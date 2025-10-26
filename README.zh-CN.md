@@ -416,9 +416,9 @@ python -m src.cli.cohort_stats --horizon 48
 | sigmoid | 0.200 | 0.1345 | -22.8410 | 0.0000 |
 
 **曲线**
-![h=24, val, raw](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_val.png)
-![h=24, val, isotonic](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_val_cal_isotonic.png)
-![h=24, val, sigmoid](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_val_cal_sigmoid.png)
+![h=24, val, raw](outputs/figures/dca_h24_val.png)
+![h=24, val, isotonic](outputs/figures/dca_h24_val_cal_isotonic.png)
+![h=24, val, sigmoid](outputs/figures/dca_h24_val_cal_sigmoid.png)
 
 ### 决策曲线分析（DCA）— 预测窗 24 小时，数据集：test
 
@@ -438,9 +438,9 @@ python -m src.cli.cohort_stats --horizon 48
 | sigmoid | 0.200 | -0.3543 | -18.3491 | 0.0000 |
 
 **曲线**
-![h=24, test, raw](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_test.png)
-![h=24, test, isotonic](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_test_cal_isotonic.png)
-![h=24, test, sigmoid](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h24_test_cal_sigmoid.png)
+![h=24, test, raw](outputs/figures/dca_h24_test.png)
+![h=24, test, isotonic](outputs/figures/dca_h24_test_cal_isotonic.png)
+![h=24, test, sigmoid](outputs/figures/dca_h24_test_cal_sigmoid.png)
 
 ### 决策曲线分析（DCA）— 预测窗 48 小时，数据集：val
 
@@ -460,9 +460,9 @@ python -m src.cli.cohort_stats --horizon 48
 | sigmoid | 0.200 | 0.1109 | -22.2983 | 0.0000 |
 
 **曲线**
-![h=48, val, raw](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_val.png)
-![h=48, val, isotonic](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_val_cal_isotonic.png)
-![h=48, val, sigmoid](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_val_cal_sigmoid.png)
+![h=48, val, raw](outputs/figures/dca_h48_val.png)
+![h=48, val, isotonic](outputs/figures/dca_h48_val_cal_isotonic.png)
+![h=48, val, sigmoid](outputs/figures/dca_h48_val_cal_sigmoid.png)
 
 ### 决策曲线分析（DCA）— 预测窗 48 小时，数据集：test
 
@@ -482,9 +482,30 @@ python -m src.cli.cohort_stats --horizon 48
 | sigmoid | 0.200 | 0.7326 | -14.2055 | 0.0000 |
 
 **曲线**
-![h=48, test, raw](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_test.png)
-![h=48, test, isotonic](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_test_cal_isotonic.png)
-![h=48, test, sigmoid](/public/home/aojiang/mimic/lymphoma-ewarn/outputs/figures/dca_h48_test_cal_sigmoid.png)
+![h=48, test, raw](outputs/figures/dca_h48_test.png)
+![h=48, test, isotonic](outputs/figures/dca_h48_test_cal_isotonic.png)
+![h=48, test, sigmoid](outputs/figures/dca_h48_test_cal_sigmoid.png)
 
 
 <!-- DCA_ZH_END -->
+
+<!-- DCA_START -->
+
+### 决策曲线（窗口=24小时，数据集=test）
+
+![DCA（原始概率）](outputs/figures/dca_h24_test.png)
+
+![DCA（后处理校准：isotonic）](outputs/figures/dca_h24_test_cal_isotonic.png)
+
+![DCA（后处理校准：sigmoid）](outputs/figures/dca_h24_test_cal_sigmoid.png)
+
+
+### 决策曲线（窗口=48小时，数据集=test）
+
+![DCA（原始概率）](outputs/figures/dca_h48_test.png)
+
+![DCA（后处理校准：isotonic）](outputs/figures/dca_h48_test_cal_isotonic.png)
+
+![DCA（后处理校准：sigmoid）](outputs/figures/dca_h48_test_cal_sigmoid.png)
+
+<!-- DCA_END -->
