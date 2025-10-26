@@ -188,3 +188,21 @@ dca-cal:
 	@$(PY) -m src.cli.dca_plot --horizon 24 --split test --calibrated sigmoid  || true
 	@$(PY) -m src.cli.dca_plot --horizon 48 --split test --calibrated sigmoid  || true
 	@echo "[Makefile] Done -> outputs/reports/dca_*_cal_*.csv and outputs/figures/dca_*_cal_*.png"
+
+# -------- DCA (Decision Curve Analysis) --------
+.PHONY: dca-batch dca-md inject-dca dca
+
+dca-batch:
+	@echo "[Makefile] Running DCA batch (24,48 × val,test × raw/isotonic/sigmoid)"
+	@python scripts/dca_batch.py --per-100
+
+dca-md:
+	@echo "[Makefile] Building DCA markdown sections (no inject)"
+	@python scripts/inject_dca.py --no-inject
+
+inject-dca:
+	@echo "[Makefile] Building & injecting DCA sections into README.md / README.zh-CN.md"
+	@python scripts/inject_dca.py
+
+dca: dca-batch inject-dca
+	@echo "[Makefile] DCA done."
