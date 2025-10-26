@@ -1,136 +1,101 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, Optional, Tuple
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 
 @dataclass
 class DCAMetrics:
-    thresholds: np.ndarray          # shape [T]
-    nb_model: np.ndarray            # shape [T]   per-patient net benefit
-    nb_treat_all: np.ndarray        # shape [T]
-    nb_treat_none: np.ndarray       # zeros [T]
-    prevalence: float               # y.mean()
-    n: int                          # number of samples actually used
+    thresholds: np.ndarray
+    nb_model: np.ndarray
+    nb_all: np.ndarray
+    nb_none: np.ndarray
+    prevalence: float
+
+    def to_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame({
+            "threshold": self.thresholds,
+            "nb_model": self.nb_model,
+            "nb_all": self.nb_all,
+            "nb_none": self.nb_none,
+            "prevalence": self.prevalence,
+        })
 
 
-def _ensure_1d(x: Iterable) -> np.ndarray:
-    x = np.asarray(x).reshape(-1)
-    return x
+def _net_benefit(y_true: np.ndarray, y_pred_bin: np.ndarray, pt: float) -> float:
+    """
+    Net benefit = TP/N - FP/N * (pt / (1-pt))
+    """
+    assert 0.0 < pt < 1.0, "pt must be in (0,1)"
+    y = y_true.astype(int)
+    yhat = y_pred_bin.astype(int)
+    N = len(y)
+    tp = (yhat & (y == 1)).sum()
+    fp = (yhat & (y == 0)).sum()
+    return (tp / N) - (fp / N) * (pt / (1.0 - pt))
 
 
-def _remove_nan(y: np.ndarray, p: np.ndarray, w: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    m = np.isfinite(y) & np.isfinite(p)
-    if w is not None:
-        m = m & np.isfinite(w)
-        w = w[m]
-    return y[m], p[m], w
-
-
-def _tp_fp_at_threshold(y: np.ndarray, p: np.ndarray, thr: float, w: Optional[np.ndarray]) -> Tuple[float, float]:
-    """Return TP and FP *counts*（或加权计数） at threshold."""
-    pred = (p >= thr).astype(int)
-    if w is None:
-        tp = float(((pred == 1) & (y == 1)).sum())
-        fp = float(((pred == 1) & (y == 0)).sum())
-    else:
-        tp = float(w[(pred == 1) & (y == 1)].sum())
-        fp = float(w[(pred == 1) & (y == 0)].sum())
-    return tp, fp
+def _net_benefit_treat_all(y_true: np.ndarray, pt: float) -> float:
+    """
+    Treat-all strategy: sensitivity=1, specificity=0  => NB_all = prevalence - (1-prevalence) * (pt/(1-pt))
+    """
+    y = y_true.astype(int)
+    prev = y.mean()
+    return prev - (1.0 - prev) * (pt / (1.0 - pt))
 
 
 def decision_curve(
-    y: Iterable,
-    p: Iterable,
+    y_true: np.ndarray,
+    y_score: np.ndarray,
     thresholds: Optional[Iterable[float]] = None,
-    sample_weight: Optional[Iterable[float]] = None,
-    per_100: bool = True,
+    per_100: bool = False,
 ) -> DCAMetrics:
     """
-    计算标准 DCA：
-      NB_model(pt) = TP/N - FP/N * pt/(1-pt)
-      NB_treat_all(pt) = prevalence - (1-prevalence) * pt/(1-pt)
-      NB_treat_none(pt) = 0
-    其中 N 是“有效样本数”（去掉 NaN 后）。
-    per_100=True 表示把 NB 乘以 100（常见于医学论文的“每 100 名患者净获益”）。
+    Compute decision curve analysis metrics.
+
+    Parameters
+    ----------
+    y_true : array-like of shape (n_samples,)
+        Binary outcomes (0/1).
+    y_score : array-like of shape (n_samples,)
+        Predicted probabilities.
+    thresholds : iterable of floats in (0,1)
+        Thresholds at which to compute net benefit.
+    per_100 : bool
+        If True, multiply NB by 100 (per 100 patients).
+
+    Returns
+    -------
+    DCAMetrics
     """
-    y = _ensure_1d(y).astype(int)
-    p = _ensure_1d(p).astype(float)
-    w = None if sample_weight is None else _ensure_1d(sample_weight).astype(float)
-
-    # 去 NaN
-    y, p, w = _remove_nan(y, p, w)
-    if len(y) == 0:
-        raise ValueError("No valid samples after removing NaNs.")
-
-    # 阈值网格
+    y = np.asarray(y_true, dtype=int)
+    p = np.asarray(y_score, dtype=float)
+    mask = ~np.isnan(p)
+    y = y[mask]
+    p = p[mask]
     if thresholds is None:
-        thresholds = np.linspace(0.01, 0.99, 99)  # 避免 0 和 1
-    thresholds = _ensure_1d(thresholds).astype(float)
-    thresholds = thresholds[(thresholds > 0) & (thresholds < 1)]
-    thresholds = np.unique(np.clip(thresholds, 1e-6, 1 - 1e-6))
+        thresholds = np.linspace(0.01, 0.99, 99)
+    thr = np.asarray(list(thresholds), dtype=float)
+    nb_model = np.zeros_like(thr, dtype=float)
+    nb_all = np.zeros_like(thr, dtype=float)
+    nb_none = np.zeros_like(thr, dtype=float)
 
-    # 样本量（或加权样本量）
-    if w is None:
-        N = float(len(y))
-        prevalence = float(y.mean())
-    else:
-        N = float(w.sum())
-        prevalence = float((w[y == 1].sum()) / N)
-
-    nb_model = []
-    nb_treat_all = []
-    for pt in thresholds:
-        tp, fp = _tp_fp_at_threshold(y, p, pt, w)
-        nb_m = (tp / N) - (fp / N) * (pt / (1 - pt))
-        nb_all = prevalence - (1 - prevalence) * (pt / (1 - pt))
-        nb_model.append(nb_m)
-        nb_treat_all.append(nb_all)
-
-    nb_model = np.asarray(nb_model)
-    nb_treat_all = np.asarray(nb_treat_all)
-    nb_treat_none = np.zeros_like(nb_model)
+    for i, t in enumerate(thr):
+        yhat = (p >= t).astype(int)
+        nb_model[i] = _net_benefit(y, yhat, t)
+        nb_all[i] = _net_benefit_treat_all(y, t)
+        nb_none[i] = 0.0
 
     if per_100:
         nb_model *= 100.0
-        nb_treat_all *= 100.0
-        nb_treat_none *= 100.0
+        nb_all *= 100.0
+        nb_none *= 100.0
 
     return DCAMetrics(
-        thresholds=thresholds,
+        thresholds=thr,
         nb_model=nb_model,
-        nb_treat_all=nb_treat_all,
-        nb_treat_none=nb_treat_none,
-        prevalence=prevalence * (100.0 if per_100 else 1.0),
-        n=int(N if w is None else round(N)),
+        nb_all=nb_all,
+        nb_none=nb_none,
+        prevalence=float(y.mean()),
     )
-
-
-def plot_dca(
-    dca: DCAMetrics,
-    title: str = "",
-    outfile: Optional[Path] = None,
-    ylim: Optional[Tuple[float, float]] = None,
-) -> None:
-    plt.figure(figsize=(10, 6))
-    plt.plot(dca.thresholds, dca.nb_model, label="Model")
-    plt.plot(dca.thresholds, dca.nb_treat_all, "--", label="Treat-all")
-    plt.plot(dca.thresholds, dca.nb_treat_none, ":", label="Treat-none")
-    plt.axhline(0, color="k", linewidth=0.7)
-    plt.xlabel("Threshold probability (pt)")
-    plt.ylabel("Net benefit" + (" (per 100 patients)" if np.max(np.abs(dca.nb_model)) > 1 else ""))
-    if title:
-        plt.title(f"DCA: {title}")
-    if ylim is not None:
-        plt.ylim(*ylim)
-    plt.legend(loc="lower left")
-    plt.tight_layout()
-    if outfile is not None:
-        outfile.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(outfile, dpi=150)
-        plt.close()
-    else:
-        plt.show()
