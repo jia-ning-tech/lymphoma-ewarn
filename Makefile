@@ -165,3 +165,26 @@ inject-thresholds: thresholds-md
 # 一键：生成 + 注入
 readme-thresholds: inject-thresholds
 	@echo "[Makefile] Thresholds snippet refreshed and injected."
+
+
+
+
+
+# ===== DCA (Decision Curve Analysis) =====
+.PHONY: dca
+dca:
+	@echo "[Makefile] DCA for h=24/48 on val/test (raw prob)"
+	@$(PY) -m src.cli.dca_plot --horizon 24 --split val
+	@$(PY) -m src.cli.dca_plot --horizon 24 --split test
+	@$(PY) -m src.cli.dca_plot --horizon 48 --split val
+	@$(PY) -m src.cli.dca_plot --horizon 48 --split test
+	@echo "[Makefile] Done -> outputs/reports/dca_*.csv and outputs/figures/dca_*.png"
+
+.PHONY: dca-cal
+dca-cal:
+	@echo "[Makefile] DCA for calibrated prob (isotonic & sigmoid)"
+	@$(PY) -m src.cli.dca_plot --horizon 24 --split test --calibrated isotonic || true
+	@$(PY) -m src.cli.dca_plot --horizon 48 --split test --calibrated isotonic || true
+	@$(PY) -m src.cli.dca_plot --horizon 24 --split test --calibrated sigmoid  || true
+	@$(PY) -m src.cli.dca_plot --horizon 48 --split test --calibrated sigmoid  || true
+	@echo "[Makefile] Done -> outputs/reports/dca_*_cal_*.csv and outputs/figures/dca_*_cal_*.png"
