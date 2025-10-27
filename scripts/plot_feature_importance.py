@@ -6,6 +6,7 @@ import warnings
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import subprocess, sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REP  = ROOT / "outputs" / "reports"
@@ -13,6 +14,48 @@ FIG  = ROOT / "outputs" / "figures"
 DOC  = ROOT / "outputs" / "docs"
 FIG.mkdir(parents=True, exist_ok=True)
 DOC.mkdir(parents=True, exist_ok=True)
+
+
+
+def ensure_shap_csv(h:int, split:str) -> Path|None:
+    shap_csv = REP / f"shap_values_top_h{h}_{split}.csv"  # 与 src/cli/shap_explain.py 的输出保持一致
+    if shap_csv.exists():
+        return shap_csv
+    # 自动调用你现有的 CLI 生成
+    try:
+        cmd = [sys.executable, "-m", "src.cli.shap_explain", "--horizon", str(h), "--split", split, "--top_n", "200", "--top_k_individual", "5"]
+        print("[plot_fi] SHAP csv not found, running:", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+        return shap_csv if shap_csv.exists() else None
+    except Exception as e:
+        print("[plot_fi] fail to auto-generate SHAP:", e)
+        return None
+
+def plot_forest(df, h:int, split:str, topn:int=20, outfile:Path=Path("out.png")):
+    top = df.head(topn).copy()
+    # 只画置换重要度（errorbar），SHAP 列存在就叠一条细柱子；否则不画 SHAP
+    fig, ax = plt.subplots(figsize=(8, 8))  # 更窄的横轴
+    y = range(len(top))[::-1]
+    ax.errorbar(top["perm_mean"].values[:topn], y,
+                xerr=top["perm_std"].values[:topn],
+                fmt="o", capsize=3, label="Permutation (mean±std)")
+
+    if "shap_mean_abs" in top.columns and top["shap_mean_abs"].max() > 0:
+        ax.barh(y, top["shap_mean_abs"].values[:topn], alpha=0.4, label="SHAP mean(|value|)")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(top["feature"].values[:topn])
+    ax.invert_yaxis()
+    xmax = float(top["perm_mean"].max() * 1.1) if top["perm_mean"].max() > 0 else 0.01
+    ax.set_xlim(0, xmax)
+    ax.grid(True, axis="x", linestyle="--", alpha=0.3)
+    ax.set_xlabel("importance")
+    ax.set_title(f"Feature importance (h={h}, {split})")
+    ax.legend(loc="lower right")
+    plt.tight_layout()
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(outfile, dpi=200)
+    plt.close()
 
 def _pretty_name(s: str) -> str:
     # 轻度清理: 连续双下划线 -> 单下划线；把一些窗口后缀更可读
@@ -61,11 +104,12 @@ def load_imp(h: int, split: str) -> pd.DataFrame:
         cand_std[0]:  "perm_std",
     })[["feature","perm_mean","perm_std"]]
 
-    # --- SHAP 兼容（可无） ---
+     # --- SHAP 兼容（可无，若无则自动生成） ---
+    shap_csv = ensure_shap_csv(h, split)
     dfs = None
-    if shap_csv.exists():
+    if shap_csv and shap_csv.exists():
         dfs_raw = pd.read_csv(shap_csv)
-        shap_cands = [c for c in ["shap_mean_abs","shap_mean","shap","mean_abs_shap","mean_abs"] if c in dfs_raw.columns]
+        shap_cands = [c for c in ["mean_abs_shap","shap_mean_abs","shap_mean","mean_abs"] if c in dfs_raw.columns]
         feat2 = "feature" if "feature" in dfs_raw.columns else None
         if feat2 is None:
             for c in ["feat","name","variable"]:
