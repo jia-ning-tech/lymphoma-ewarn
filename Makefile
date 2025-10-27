@@ -217,3 +217,51 @@ readme-polish:
 # 串联：项目结构 + 消融 + DCA + 阈值片段 + 徽章/TOC
 readme-all: structure inject-structure ablation-md inject-ablation dca-batch inject-dca readme-thresholds readme-polish
 	@echo "[Makefile] README (ALL) done."
+
+
+
+# ------- Release snapshot (可复现快照) -------
+.PHONY: release-snapshot release-readme release-tag
+
+# 例：make release-snapshot TAG=v0.1-preprint NO_PREDS=1  NO_MODELS=1
+release-snapshot:
+	@[ -n "$(TAG)" ] || (echo "Usage: make release-snapshot TAG=v0.1-preprint [NO_PREDS=1] [NO_MODELS=1]"; exit 1)
+	@echo "[Makefile] Snapshot -> outputs/release/$(TAG)"
+	@python scripts/make_release.py --tag "$(TAG)" $(if $(NO_PREDS),--no-preds,) $(if $(NO_MODELS),--no-models,)
+
+# 把快照说明块注入 README / README.zh-CN.md
+release-readme:
+	@[ -n "$(TAG)" ] || (echo "Usage: make release-readme TAG=v0.1-preprint"; exit 1)
+	@python scripts/make_release.py --tag "$(TAG)" --inject-readme
+
+# 打 Git tag（只做打标，不推送）
+release-tag:
+	@[ -n "$(TAG)" ] || (echo "Usage: make release-tag TAG=v0.1-preprint"; exit 1)
+	@git tag -a "$(TAG)" -m "Release snapshot $(TAG)"
+	@echo "Tagged: $(TAG)  (push with:  git push origin $(TAG) )"
+
+
+
+# ------- Feature Importance -------
+.PHONY: fi-run fi-plot fi-all
+
+# 运行：Permutation + SHAP（示例：make fi-run H=24 SPLIT=test）
+fi-run:
+	@[ -n "$(H)" ] || (echo "Usage: make fi-run H=24 SPLIT=test"; exit 1)
+	@python scripts/run_feature_importance.py --horizon $(H) --split $(if $(SPLIT),$(SPLIT),test)
+
+# 出图 + 表格
+fi-plot:
+	@[ -n "$(H)" ] || (echo "Usage: make fi-plot H=24 SPLIT=test"; exit 1)
+	@python scripts/plot_feature_importance.py --horizon $(H) --split $(if $(SPLIT),$(SPLIT),test)
+
+# 一键（24/48 * val/test）
+fi-all:
+	@make fi-run H=24 SPLIT=val
+	@make fi-run H=24 SPLIT=test
+	@make fi-run H=48 SPLIT=val
+	@make fi-run H=48 SPLIT=test
+	@make fi-plot H=24 SPLIT=val
+	@make fi-plot H=24 SPLIT=test
+	@make fi-plot H=48 SPLIT=val
+	@make fi-plot H=48 SPLIT=test
