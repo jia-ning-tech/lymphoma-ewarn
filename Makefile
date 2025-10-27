@@ -242,26 +242,3 @@ release-tag:
 
 
 
-# ------- Feature Importance -------
-.PHONY: fi-run fi-plot fi-all
-
-# 运行：Permutation + SHAP（示例：make fi-run H=24 SPLIT=test）
-fi-run:
-	@[ -n "$(H)" ] || (echo "Usage: make fi-run H=24 SPLIT=test"; exit 1)
-	@python scripts/run_feature_importance.py --horizon $(H) --split $(if $(SPLIT),$(SPLIT),test)
-
-# 出图 + 表格
-fi-plot:
-	@[ -n "$(H)" ] || (echo "Usage: make fi-plot H=24 SPLIT=test"; exit 1)
-	@python scripts/plot_feature_importance.py --horizon $(H) --split $(if $(SPLIT),$(SPLIT),test)
-
-# 一键（24/48 * val/test）
-fi-all:
-	@make fi-run H=24 SPLIT=val
-	@make fi-run H=24 SPLIT=test
-	@make fi-run H=48 SPLIT=val
-	@make fi-run H=48 SPLIT=test
-	@make fi-plot H=24 SPLIT=val
-	@make fi-plot H=24 SPLIT=test
-	@make fi-plot H=48 SPLIT=val
-	@make fi-plot H=48 SPLIT=test
