@@ -199,6 +199,8 @@ python -m src.cli.calibration_plot --horizon 48 --split test --bins 20 --strateg
 
 
 
+
+
 ### 3.3 Lead Time (Test)
 
 | Horizon |  n | Mean (h) | Median (h) |  P10 |  P25 |   P75 |   P90 |   Max |

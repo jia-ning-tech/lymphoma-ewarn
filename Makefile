@@ -242,3 +242,26 @@ release-tag:
 
 
 
+# ==== Threshold selection + Confusion matrix (use existing injector) ====
+.PHONY: thr-run thr-snippet thr-inject readme-thresholds
+
+# 计算每种方法的混淆矩阵与指标，产出若干 outputs/docs/threshold_h*md
+# 用法：make thr-run H=24,48 SPLIT=test M=raw,isotonic,sigmoid EXTRA=0.1,0.2
+thr-run:
+	@python scripts/threshold_report.py --horizons $(H) --split $(SPLIT) --methods $(M) --extra-thr $(EXTRA)
+
+# 将若干 md 片段合并为你老脚本需要的 outputs/docs/thresholds_for_readme.md
+# 用法：make thr-snippet H=24,48 SPLIT=test M=raw,isotonic,sigmoid
+thr-snippet:
+	@python scripts/thresholds_make_snippet.py --horizons $(H) --split $(SPLIT) --methods $(M)
+
+# 调用你现有的注入器（锚点：<!-- THRESHOLDS_START --> ... <!-- THRESHOLDS_END -->）
+thr-inject:
+	@python scripts/inject_thresholds.py
+
+# 一键：计算 -> 合并 -> 注入
+# 用法：make readme-thresholds H=24,48 SPLIT=test M=raw,isotonic,sigmoid EXTRA=
+readme-thresholds:
+	@$(MAKE) thr-run H=$(H) SPLIT=$(SPLIT) M=$(M) EXTRA=$(EXTRA)
+	@$(MAKE) thr-snippet H=$(H) SPLIT=$(SPLIT) M=$(M)
+	@$(MAKE) thr-inject
