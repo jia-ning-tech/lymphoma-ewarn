@@ -87,6 +87,22 @@
 
 ## 2. 方法（Methods）
 
+**任务与结局定义**
+
+* 二分类：在 **索引时间** 之后的 **H 小时** 内是否发生“**临床恶化**”。`label=1` 代表恶化，`label=0` 代表未恶化。
+* 恶化为复合终点（可调整）：器官支持的启动/升级（机械通气/PEEP、升压药、RRT…）、显著生理恶化、住院死亡。
+* 事件规则实现在 `src/events/detect_events.py`，标签生成在 `src/labeling/make_labels.py`，最终训练表位于 `data_interim/trainset_h{H}.parquet`。
+
+**特征与模型**
+
+* 372 个特征，按 **vitals / labs / vent / others** 分组；对 6h/24h 窗口做 last/mean/min/max/std/count 与趋势。
+* 模型为随机森林（600 棵树），类别权重平衡；5 折分组交叉验证，后验校准（isotonic/sigmoid），并通过 DCA 与阈值报告选择工作点。
+
+**主要发现**
+
+* 全特征在 h=24 达 AUROC≈0.80、AP≈0.13。
+* 消融与置换重要度共同提示：**呼吸支持与生命体征相关的计数/统计**是主要信息源，**通气（vent）**尤为关键；“others”单独保留时性能显著下滑。
+* 这些与临床预期一致：**即将需要更强器官支持**的病人往往在通气参数、呼吸频率、血压与代谢相关指标上提前出现信号。
 ### 2.1 队列与窗口（Cohort & Windows）
 
 * 窗口总数：**60,593**（位于 `data_interim/trainset_hXX.parquet`）

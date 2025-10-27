@@ -94,6 +94,85 @@ Timely detection of clinical deterioration among ICU lymphoma patients is challe
 
 ## 2. Methods
 
+
+### Task Definition
+
+**Problem.** We train binary predictors to flag whether an ICU patient with lymphoma will experience a **deterioration event** within the next **H hours** (H∈{24,48}) after a given **index_time**.
+**Outcome.** `label=1` if any **composite deterioration event** occurs in the future window *(index_time, index_time+Hh]*; otherwise `label=0`.
+**Composite definition (typical; adjustable):**
+
+* Initiation/escalation of organ support (e.g., invasive ventilation / PEEP increase, vasopressors, RRT);
+* Marked physiological decompensation per rules;
+* In-ICU mortality.
+
+> The event rules are implemented in `src/events/detect_events.py`, and labels are materialized by `src/labeling/make_labels.py`. Final training frames with `label` live in `data_interim/trainset_h{H}.parquet`.
+
+### Cohort & Time Indexing
+
+* Cohort construction: `src/cli/build_cohort.py` (ICU lymphoma stays; inclusion/exclusion per config).
+* Index time series: each stay contributes multiple index_time rows (rolling windows), **leakage-controlled** via time alignment utilities in `src/utils/timeidx.py`.
+* Train/val/test split: grouped by stay/hadm (`src/cli/make_splits.py`) to avoid identity leakage.
+
+### Features
+
+* Streams grouped into **vitals (98)**, **labs (112)**, **vent (14)**, **others (148)** (totalling 372).
+* For each stream and **6h/24h** windows, we derive summary stats: last/mean/min/max/std/count and simple trends, via
+  `src/features/aggregate_windows.py`, `src/features/build_feature_table.py`.
+* Feature tables are written to `data_interim/trainset_h{H}.parquet`.
+
+### Model
+
+* Primary classifier: **RandomForestClassifier** (`n_estimators=600`, class_weight balanced_subsample), wrapped in a pipeline with median imputation and (sparse-safe) standardization (`with_mean=False`). See `src/modeling/train.py` and `src/models/baseline.py`.
+* Hyperparameters: coarse **sweep** via `src/cli/hparam_sweep.py` (5-fold grouped CV).
+
+### Training, Calibration & Thresholding
+
+* **Grouped 5-fold CV** for model selection (`src/cli/cv_grouped.py`).
+* **Post-hoc calibration**: isotonic and sigmoid (`src/cli/posthoc_calibrate.py`), evaluated on validation/test.
+* **Operating point**: select thresholds by maximizing F-score/Youden or by decision-analytic criteria; the currently chosen threshold is written to `outputs/reports/posthoc_calibration_h{H}_*.json` and summarized in README via our automation.
+
+### Evaluation
+
+* Discrimination: **AUROC**, **Average Precision (AP)** with mean±std across folds.
+* **Ablation**: drop-one / keep-only by feature groups (`src/cli/ablation_study.py`), rendered as forest/bar plots; results indicate **vent** & **vitals** are particularly informative.
+* **Decision Curve Analysis (DCA)**: `src/eval/dca.py`, CLI `src/cli/dca_plot.py` produces net-benefit curves vs. threshold.
+* **Feature importance**: permutation ΔAUC (`scripts/run_feature_importance.py`, `scripts/plot_feature_importance.py`).
+
+  > SHAP is supported via `src/cli/shap_explain.py`; for RF inside a calibrated wrapper we unwrap the base estimator before SHAP (beeswarm/bar & top-k waterfalls). You can run it independently without modifying training code.
+
+### Reproducibility
+
+1. **Build data & labels**
+
+   ```bash
+   python -m src.cli.build_cohort         # cohort
+   python -m src.cli.build_events_labels  # event rules -> labels
+   python -m src.cli.build_features       # feature tables
+   python -m src.cli.make_splits          # grouped splits
+   ```
+2. **Train & calibrate**
+
+   ```bash
+   python -m src.cli.train_val_test --horizon 24
+   python -m src.cli.posthoc_calibrate --horizon 24 --method isotonic
+   # repeat for 48h & sigmoid if needed
+   ```
+3. **Ablation / FI / DCA / Threshold snippet → README**
+
+   ```bash
+   make ablation-md
+   make ablation-charts
+   make fi-all
+   make dca H=24,48 SPLIT=test
+   make readme-thresholds H=24,48 SPLIT=test M=raw,isotonic,sigmoid
+   ```
+
+### Ethics & Data Handling
+
+* Only de-identified data; no PHI is stored in this repo.
+* Generated artifacts under `outputs/` exclude raw patient data in `.gitignore`.
+* Model is **clinical-research only** and not a licensed medical device.
+
 ### 2.1 Cohort & Feature Windows
 
 * Windows: **60,593** rows (`data_interim/trainset_hXX.parquet`)
